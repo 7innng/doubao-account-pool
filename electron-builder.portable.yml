@@ -1,0 +1,20 @@
+appId: com.local.dola-account-manager
+productName: Dola账号池接口服务
+directories:
+  output: release/portable
+files:
+  - dist/**/*
+  - dist-electron/**/*
+  - extensions/**/*
+  - package.json
+afterPack: scripts/after-pack.cjs
+npmRebuild: false
+win:
+  target:
+    - target: portable
+      arch:
+        - x64
+  artifactName: ${productName}-${version}-portable-win-${arch}.${ext}
+asarUnpack:
+  - "**/*.node"
+  - extensions/**/*

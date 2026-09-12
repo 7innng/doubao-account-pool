@@ -8,7 +8,8 @@ import type {
   AppSettings,
   AppSettingsUpdateInput,
   CreditLedgerEntry,
-  OperationLog
+  OperationLog,
+  TcpServerStatus
 } from "../electron/types";
 
 declare global {
@@ -33,6 +34,10 @@ declare global {
       apiServer: {
         status: () => Promise<ApiServerStatus>;
         restart: () => Promise<ApiServerStatus>;
+      };
+      tcpServer: {
+        status: () => Promise<TcpServerStatus>;
+        restart: () => Promise<TcpServerStatus>;
       };
       apiRequests: {
         list: (limit?: number) => Promise<ApiRequest[]>;

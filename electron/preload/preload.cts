@@ -22,6 +22,10 @@ const api = {
     status: () => ipcRenderer.invoke("api-server:status"),
     restart: () => ipcRenderer.invoke("api-server:restart")
   },
+  tcpServer: {
+    status: () => ipcRenderer.invoke("tcp-server:status"),
+    restart: () => ipcRenderer.invoke("tcp-server:restart")
+  },
   apiRequests: {
     list: (limit?: number) => ipcRenderer.invoke("api-requests:list", limit),
     clear: () => ipcRenderer.invoke("api-requests:clear")

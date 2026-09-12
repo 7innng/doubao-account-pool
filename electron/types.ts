@@ -67,6 +67,8 @@ export interface AppSettings {
   apiServiceEnabled: boolean;
   apiPort: number;
   apiKey: string;
+  tcpServiceEnabled: boolean;
+  tcpPort: number;
   executorEnabled: boolean;
   showExecutorWindow: boolean;
   autoCloseExecutorWindow: boolean;
@@ -169,6 +171,17 @@ export interface ApiServerStatus {
   running: boolean;
   port: number;
   url: string | null;
+  message: string;
+}
+
+export interface TcpServerStatus {
+  version: string;
+  enabled: boolean;
+  running: boolean;
+  host: string;
+  port: number;
+  address: string | null;
+  fingerprint: string | null;
   message: string;
 }
 

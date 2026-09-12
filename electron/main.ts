@@ -22,6 +22,7 @@ import type {
   GenerateRequestBody
 } from "./types.js";
 import { resolveCleanVideoUrl } from "./watermark.js";
+import { TcpApiServer } from "./tcp-api.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -30,6 +31,7 @@ let mainWindow: BrowserWindow | null = null;
 let db: AppDatabase;
 let executor: DolaExecutor;
 let apiServer: LocalApiServer;
+let tcpApiServer: TcpApiServer;
 
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
 const USER_SESSION_DAYS = 30;
@@ -667,12 +669,20 @@ function registerIpc() {
   ipcMain.handle("settings:update", async (_event, input: AppSettingsUpdateInput) => {
     const settings = db.updateSettings(input);
     await apiServer.applySettings(settings);
+    await tcpApiServer.applySettings(settings);
     recordOperation(null, null, "保存配置", "success", "配置已保存并应用");
     return settings;
   });
 
   ipcMain.handle("api-server:status", () => apiServer.getStatus());
-  ipcMain.handle("api-server:restart", async () => apiServer.applySettings(db.getSettings()));
+  ipcMain.handle("api-server:restart", async () => {
+    const settings = db.getSettings();
+    await apiServer.applySettings(settings);
+    await tcpApiServer.applySettings(settings);
+    return apiServer.getStatus();
+  });
+  ipcMain.handle("tcp-server:status", () => tcpApiServer.getStatus());
+  ipcMain.handle("tcp-server:restart", async () => tcpApiServer.applySettings(db.getSettings()));
 
   ipcMain.handle("api-requests:list", (_event, limit?: number) => db.listApiRequests(limit || 100));
   ipcMain.handle("api-requests:clear", () => {
@@ -1070,8 +1080,10 @@ if (!hasSingleInstanceLock) {
     db = new AppDatabase();
     executor = new DolaExecutor(db, notifyDataChanged);
     apiServer = new LocalApiServer(db, executor);
+    tcpApiServer = new TcpApiServer(() => apiServer.getStatus());
     registerIpc();
     await apiServer.applySettings(db.getSettings());
+    await tcpApiServer.applySettings(db.getSettings());
     createMainWindow();
 
     app.on("activate", () => {
@@ -1085,6 +1097,7 @@ if (!hasSingleInstanceLock) {
 }
 
 app.on("before-quit", async () => {
+  await tcpApiServer?.stop();
   await apiServer?.stop();
 });
 

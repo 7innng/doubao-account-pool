@@ -13,7 +13,8 @@ import type {
   DolaModel,
   LoginStatus,
   OperationLog,
-  OperationLogStatus
+  OperationLogStatus,
+  TcpServerStatus
 } from "../electron/types";
 
 type TabKey = "accounts" | "users" | "api-test" | "settings" | "logs" | "actions";
@@ -38,11 +39,21 @@ const operationLogs = ref<OperationLog[]>([]);
 const apiUsers = ref<ApiUser[]>([]);
 const creditLedger = ref<CreditLedgerEntry[]>([]);
 const apiStatus = ref<ApiServerStatus>({
-  version: "0.2.1",
+  version: "0.3.0",
   enabled: false,
   running: false,
   port: 0,
   url: null,
+  message: "未启动"
+});
+const tcpStatus = ref<TcpServerStatus>({
+  version: "0.3.0",
+  enabled: true,
+  running: false,
+  host: "0.0.0.0",
+  port: 17889,
+  address: null,
+  fingerprint: null,
   message: "未启动"
 });
 const loading = ref(true);
@@ -94,6 +105,8 @@ const settingsForm = reactive<AppSettings>({
   apiServiceEnabled: true,
   apiPort: 17888,
   apiKey: "",
+  tcpServiceEnabled: true,
+  tcpPort: 17889,
   executorEnabled: true,
   showExecutorWindow: false,
   autoCloseExecutorWindow: true,
@@ -419,10 +432,11 @@ async function refresh() {
   if (refreshInFlight) return;
   refreshInFlight = true;
   try {
-  const [accountRows, settings, status, requests, actions, users, ledger] = await Promise.all([
+  const [accountRows, settings, status, tcp, requests, actions, users, ledger] = await Promise.all([
     window.dolaManager.accounts.list(),
     window.dolaManager.settings.get(),
     window.dolaManager.apiServer.status(),
+    window.dolaManager.tcpServer.status(),
     window.dolaManager.apiRequests.list(100),
     window.dolaManager.operationLogs.list(500),
     window.dolaManager.apiUsers.list(),
@@ -434,6 +448,7 @@ async function refresh() {
   apiUsers.value = users;
   creditLedger.value = ledger;
   apiStatus.value = status;
+  tcpStatus.value = tcp;
   Object.assign(settingsForm, settings);
   } finally {
     refreshInFlight = false;
@@ -571,6 +586,7 @@ async function saveSettings() {
   await window.dolaManager.settings.update({
     ...settingsForm,
     apiPort: Number(settingsForm.apiPort),
+    tcpPort: Number(settingsForm.tcpPort),
     dailyQuotaLimit: Number(settingsForm.dailyQuotaLimit),
     seedance20Cost: Number(settingsForm.seedance20Cost),
     seedance25Cost: Number(settingsForm.seedance25Cost),
@@ -583,6 +599,7 @@ async function saveSettings() {
 
 async function restartApiServer() {
   apiStatus.value = await window.dolaManager.apiServer.restart();
+  tcpStatus.value = await window.dolaManager.tcpServer.status();
 }
 
 async function clearLogs() {
@@ -749,12 +766,12 @@ function closeMenus() {
 }
 
 function apiDisplayAddress() {
-  return apiStatus.value.url?.replace(/^https?:\/\//, "") || apiStatus.value.message;
+  return tcpStatus.value.address || tcpStatus.value.message;
 }
 
 async function copyApiAddress() {
-  if (!apiStatus.value.url) return;
-  await navigator.clipboard.writeText(apiStatus.value.url);
+  if (!tcpStatus.value.address) return;
+  await navigator.clipboard.writeText(`服务器IP:${tcpStatus.value.port}`);
   apiAddressCopied.value = true;
   window.setTimeout(() => {
     apiAddressCopied.value = false;
@@ -798,12 +815,12 @@ onBeforeUnmount(() => {
         <h1>Dola账号池</h1>
         <p>仅连接 dola.com，多账号隔离登录，并内置 Dola 媒体扩展。</p>
       </div>
-      <div class="api-status-compact" :class="{ running: apiStatus.running, error: !apiStatus.running }">
+      <div class="api-status-compact" :class="{ running: tcpStatus.running, error: !tcpStatus.running }">
         <span class="status-dot" aria-hidden="true"></span>
-        <strong>{{ apiStatus.running ? "API 正常" : "API 异常" }}</strong>
-        <span class="app-version">v{{ apiStatus.version }}</span>
+        <strong>{{ tcpStatus.running ? "TCP 正常" : "TCP 异常" }}</strong>
+        <span class="app-version">v{{ tcpStatus.version }}</span>
         <span>{{ apiDisplayAddress() }}</span>
-        <button v-if="apiStatus.url" type="button" @click="copyApiAddress">
+        <button v-if="tcpStatus.address" type="button" @click="copyApiAddress">
           {{ apiAddressCopied ? "已复制" : "复制地址" }}
         </button>
       </div>
@@ -1197,10 +1214,27 @@ onBeforeUnmount(() => {
         </div>
 
         <div class="form-section">
-          <h3>本地 API</h3>
+          <h3>用户端 TLS/TCP</h3>
+          <label class="checkbox-line">
+            <input v-model="settingsForm.tcpServiceEnabled" type="checkbox" />
+            开启用户端 TCP 服务
+          </label>
+          <label>
+            <span>TCP 监听端口</span>
+            <input v-model.number="settingsForm.tcpPort" type="number" min="1" max="65535" />
+          </label>
+          <p class="form-hint">监听全部网卡。公网使用时，请在 Windows 防火墙和路由器中放行该 TCP 端口。</p>
+          <label>
+            <span>TLS 证书指纹</span>
+            <input :value="tcpStatus.fingerprint || 'TCP 服务启动后生成'" readonly />
+          </label>
+        </div>
+
+        <div class="form-section">
+          <h3>服务端内部 API</h3>
           <label class="checkbox-line">
             <input v-model="settingsForm.apiServiceEnabled" type="checkbox" />
-            开启本地 API 服务
+            开启本机内部 API（TCP 服务依赖）
           </label>
           <label>
             <span>端口</span>

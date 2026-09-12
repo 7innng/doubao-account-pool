@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src http: https:; img-src 'self' data: blob:; media-src http: https: blob:;" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'none'; img-src 'self' data: blob:; media-src 'self' file: blob:;" />
   <title>Dola API 客户端</title>
   <style>
     :root { color-scheme: light; font-family: Inter, "PingFang SC", "Microsoft YaHei", sans-serif; color: #18202d; background: #f4f6fa; --primary:#6658ee; --primary2:#4d3fd8; --border:#dfe4ed; --muted:#687385; --danger:#c43e3e; --success:#117647; }
@@ -22,7 +22,7 @@
     .userbar { display:flex;align-items:center;gap:10px; }
     .credits { padding:9px 13px;border:1px solid #d9d3ff;background:#f3f0ff;border-radius:12px;color:#4d3fd8;font-weight:800; }
     .card { background:#fff;border:1px solid var(--border);border-radius:16px;box-shadow:0 10px 30px #1e2a4410;padding:20px; }
-    .api-card { display:grid;grid-template-columns:1fr auto;gap:12px;align-items:end;margin-bottom:18px; }
+    .api-card { display:grid;grid-template-columns:1fr auto auto;gap:12px;align-items:end;margin-bottom:18px; }
     label { display:grid;gap:7px;color:#3c4655;font-size:13px;font-weight:700; }
     input,textarea { width:100%;border:1px solid #ccd3df;border-radius:10px;padding:11px 12px;background:#fff;color:#18202d;outline:none;transition:.15s; }
     input:focus,textarea:focus { border-color:#7769ef;box-shadow:0 0 0 3px #6658ee1c; }
@@ -75,12 +75,13 @@
     </header>
 
     <section class="card api-card">
-      <label>API 地址<input id="apiBase" type="url" placeholder="https://api.example.com" autocomplete="url" /></label>
+      <label>服务器 TCP 地址<input id="apiBase" placeholder="example.com:17889" autocomplete="off" /></label>
       <button id="testApi" class="btn">检测连接</button>
+      <button id="resetTrust" class="btn" title="服务器重装导致证书变化时使用">重置信任</button>
     </section>
 
     <section id="auth" class="card auth">
-      <div><h2>登录后开始生成</h2><p class="sub">API 地址和登录令牌只保存在这台电脑。</p></div>
+      <div><h2>登录后开始生成</h2><p class="sub">通过加密 TLS/TCP 直连，地址、证书指纹和登录令牌只保存在这台电脑。</p></div>
       <div class="auth-tabs"><button id="loginTab" class="active">登录</button><button id="registerTab">注册</button></div>
       <form id="authForm" class="auth-form">
         <label>用户名<input id="authUsername" required minlength="3" maxlength="32" autocomplete="username" /></label>
@@ -106,7 +107,7 @@
         <div class="card result">
           <div class="section-head"><div><h2>生成结果</h2><p class="sub">提交后每 2 秒自动查询。</p></div><button id="refreshResult" class="btn hidden" type="button">刷新</button></div>
           <div id="emptyResult" class="empty">还没有任务<br />在左侧填写提示词后开始生成</div>
-          <div id="resultBody" class="hidden"><div class="status-line"><span id="status" class="pill"></span><code id="requestId"></code></div><p id="resultMessage" class="sub"></p><video id="video" class="hidden" controls></video><p id="videoLinkWrap" class="hidden"><a id="videoLink" class="btn primary" download>下载 MP4</a></p><pre id="json"></pre></div>
+          <div id="resultBody" class="hidden"><div class="status-line"><span id="status" class="pill"></span><code id="requestId"></code></div><p id="resultMessage" class="sub"></p><video id="video" class="hidden" controls></video><p id="videoLinkWrap" class="hidden"><button id="videoLink" class="btn primary" type="button">另存为 MP4</button></p><pre id="json"></pre></div>
         </div>
         <div class="card recent"><h3>最近任务</h3><div id="recentList" class="recent-list"><p class="sub">暂无任务</p></div></div>
       </aside>
@@ -115,35 +116,33 @@
 
   <script>
     const $ = (id) => document.getElementById(id);
-    const state = { mode:"login", token:localStorage.getItem("dola.token")||"", user:null, requestId:"", pollTimer:null, files:[], videoObjectUrl:"" };
-    $("apiBase").value = localStorage.getItem("dola.apiBase") || "";
+    const state = { mode:"login", token:localStorage.getItem("dola.tcp.token")||"", user:null, requestId:"", pollTimer:null, files:[], videoFilePath:"", loadedVideoRequestId:"", lastFingerprint:"" };
+    $("apiBase").value = localStorage.getItem("dola.tcp.address") || "127.0.0.1:17889";
 
-    function baseUrl(){ return $("apiBase").value.trim().replace(/\/+$/,""); }
-    function saveBase(){ const value=baseUrl(); if(!/^https?:\/\//i.test(value)) throw new Error("API 地址必须以 http:// 或 https:// 开头"); localStorage.setItem("dola.apiBase",value); return value; }
-    async function api(path, options={}){
-      const base=saveBase(); const headers=new Headers(options.headers||{}); if(state.token) headers.set("Authorization",`Bearer ${state.token}`);
-      const response=await fetch(base+path,{...options,headers}); const text=await response.text(); let data={}; try{data=text?JSON.parse(text):{}}catch{throw new Error(`接口返回的不是 JSON（HTTP ${response.status}）`)}
-      if(!response.ok){ const error=new Error(data.error||data.message||`HTTP ${response.status}`); error.status=response.status; throw error; } return data;
-    }
-    function setMessage(id,text,ok=false){ const el=$(id); el.textContent=text||""; el.classList.toggle("ok",ok); }
-    function setLoggedIn(user){ state.user=user; $("auth").classList.add("hidden"); $("app").classList.remove("hidden"); $("userbar").classList.remove("hidden"); $("username").textContent=user.username; $("credits").textContent=user.credits; }
-    function setLoggedOut(){ state.token="";state.user=null;localStorage.removeItem("dola.token");clearTimeout(state.pollTimer);$("auth").classList.remove("hidden");$("app").classList.add("hidden");$("userbar").classList.add("hidden"); }
-    async function refreshMe(){ const data=await api("/api/me"); setLoggedIn(data.user); return data.user; }
-    async function loadRecent(){ try{const data=await api("/api/me/requests?limit=6");const list=$("recentList");list.innerHTML="";(data.requests||[]).forEach(item=>{const div=document.createElement("button");div.type="button";div.className="recent-item";div.innerHTML=`<code>${escapeHtml(item.requestId)}</code><span class="sub">${escapeHtml(item.status)} · ${escapeHtml(item.message||"")}</span>`;div.onclick=()=>{state.requestId=item.requestId;showResult(item);};list.appendChild(div)});if(!data.requests?.length)list.innerHTML='<p class="sub">暂无任务</p>'}catch{} }
-    function escapeHtml(value){return String(value).replace(/[&<>'"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[c]));}
-    function setMode(mode){state.mode=mode;$("loginTab").classList.toggle("active",mode==="login");$("registerTab").classList.toggle("active",mode==="register");$("authSubmit").textContent=mode==="login"?"登录":"注册";$("authPassword").autocomplete=mode==="login"?"current-password":"new-password";setMessage("authMessage","");}
-    $("loginTab").onclick=()=>setMode("login"); $("registerTab").onclick=()=>setMode("register");
-    $("authForm").onsubmit=async(e)=>{e.preventDefault();const btn=$("authSubmit");btn.disabled=true;setMessage("authMessage","");try{const data=await api(`/api/auth/${state.mode}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:$("authUsername").value.trim(),password:$("authPassword").value})});state.token=data.accessToken;localStorage.setItem("dola.token",state.token);setLoggedIn(data.user);await loadRecent();}catch(error){setMessage("authMessage",error.message)}finally{btn.disabled=false}};
-    $("logout").onclick=async()=>{try{await api("/api/auth/logout",{method:"POST"})}catch{}setLoggedOut()};
-    $("testApi").onclick=async()=>{try{const data=await api("/health");setMessage("authMessage",data.ok?"API 连接正常":"API 状态异常",Boolean(data.ok))}catch(error){setMessage("authMessage",error.message)}};
-    $("images").onchange=(e)=>{const files=Array.from(e.target.files||[]);if(files.length>10){e.target.value="";state.files=[];setMessage("generateMessage","参考图最多 10 张，请重新选择");}else{state.files=files;setMessage("generateMessage","");}$("fileList").innerHTML=state.files.map(file=>`<li title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</li>`).join("")};
-    async function loadVideo(data){const path=data.videoUrl||"";const direct=data.cleanVideoUrl||"";if(!path&&!direct){$("video").classList.add("hidden");$("videoLinkWrap").classList.add("hidden");return;}try{let playable=direct;if(path){const url=saveBase()+path;const response=await fetch(url,{headers:{Authorization:`Bearer ${state.token}`}});if(!response.ok)throw new Error(`视频下载失败：HTTP ${response.status}`);const blob=await response.blob();if(state.videoObjectUrl)URL.revokeObjectURL(state.videoObjectUrl);state.videoObjectUrl=URL.createObjectURL(new Blob([blob],{type:"video/mp4"}));playable=state.videoObjectUrl;}$("video").src=playable;$("videoLink").href=playable;$("videoLink").download=`${data.requestId||state.requestId||"dola-video"}.mp4`;$("video").classList.remove("hidden");$("videoLinkWrap").classList.remove("hidden");}catch(error){setMessage("generateMessage",error.message)}}
-    function showResult(data){$("emptyResult").classList.add("hidden");$("resultBody").classList.remove("hidden");$("refreshResult").classList.remove("hidden");$("status").textContent=data.status||"unknown";$("status").className=`pill ${data.status||""}`;$("requestId").textContent=data.requestId||state.requestId;$("resultMessage").textContent=data.message||"";$("json").textContent=JSON.stringify(data,null,2);if(data.videoUrl||data.cleanVideoUrl)void loadVideo(data);else{$("video").classList.add("hidden");$("videoLinkWrap").classList.add("hidden")}}
-    async function poll(){if(!state.requestId)return;try{const data=await api(`/api/requests/${encodeURIComponent(state.requestId)}`);showResult(data);await refreshMe();if(["success","failed","stopped"].includes(data.status)){await loadRecent();return;}state.pollTimer=setTimeout(poll,2000)}catch(error){setMessage("generateMessage",error.message);if(error.status===401)setLoggedOut();}}
+    function connection(){const value=$("apiBase").value.trim().replace(/^tls:\/\//i,"");const ipv6=value.match(/^\[([^\]]+)](?::(\d+))?$/);const split=value.lastIndexOf(":");const host=(ipv6?ipv6[1]:(split>0?value.slice(0,split):value)).trim();const port=ipv6?Number(ipv6[2]||17889):(split>0?Number(value.slice(split+1)):17889);if(!host||!Number.isInteger(port)||port<1||port>65535)throw new Error("请填写正确的 TCP 地址，例如 example.com:17889");const address=host.includes(":")?`[${host}]:${port}`:`${host}:${port}`;localStorage.setItem("dola.tcp.address",address);return{host,port,fingerprint:localStorage.getItem(`dola.tcp.fingerprint.${address}`)||"",address};}
+    function rememberFingerprint(conn,fingerprint){if(fingerprint){state.lastFingerprint=fingerprint;localStorage.setItem(`dola.tcp.fingerprint.${conn.address}`,fingerprint)}}
+    async function tcp(action,payload={}){const conn=connection();if(action!=="health"&&!conn.fingerprint){const probe=await window.dolaTcp.request(conn,{id:crypto.randomUUID(),action:"health"});rememberFingerprint(conn,probe.fingerprint);conn.fingerprint=probe.fingerprint}const result=await window.dolaTcp.request(conn,{id:crypto.randomUUID(),action,token:state.token,...payload});rememberFingerprint(conn,result.fingerprint);return result.data;}
+    function setMessage(id,text,ok=false){const el=$(id);el.textContent=text||"";el.classList.toggle("ok",ok)}
+    function setLoggedIn(user){state.user=user;$("auth").classList.add("hidden");$("app").classList.remove("hidden");$("userbar").classList.remove("hidden");$("username").textContent=user.username;$("credits").textContent=user.credits}
+    function setLoggedOut(){state.token="";state.user=null;localStorage.removeItem("dola.tcp.token");clearTimeout(state.pollTimer);$("auth").classList.remove("hidden");$("app").classList.add("hidden");$("userbar").classList.add("hidden")}
+    async function refreshMe(){const data=await tcp("me");setLoggedIn(data.user);return data.user}
+    async function loadRecent(){try{const data=await tcp("requests",{limit:6});const list=$("recentList");list.innerHTML="";(data.requests||[]).forEach(item=>{const div=document.createElement("button");div.type="button";div.className="recent-item";div.innerHTML=`<code>${escapeHtml(item.requestId)}</code><span class="sub">${escapeHtml(item.status)} · ${escapeHtml(item.message||"")}</span>`;div.onclick=()=>{state.requestId=item.requestId;showResult(item)};list.appendChild(div)});if(!data.requests?.length)list.innerHTML='<p class="sub">暂无任务</p>'}catch{}}
+    function escapeHtml(value){return String(value).replace(/[&<>'"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[c]))}
+    function setMode(mode){state.mode=mode;$("loginTab").classList.toggle("active",mode==="login");$("registerTab").classList.toggle("active",mode==="register");$("authSubmit").textContent=mode==="login"?"登录":"注册";$("authPassword").autocomplete=mode==="login"?"current-password":"new-password";setMessage("authMessage","")}
+    function fileToBase64(file){return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(",")[1]||"");reader.onerror=()=>reject(new Error(`读取图片失败：${file.name}`));reader.readAsDataURL(file)})}
+    $("loginTab").onclick=()=>setMode("login");$("registerTab").onclick=()=>setMode("register");
+    $("authForm").onsubmit=async(e)=>{e.preventDefault();const btn=$("authSubmit");btn.disabled=true;setMessage("authMessage","");try{const data=await tcp(state.mode,{username:$("authUsername").value.trim(),password:$("authPassword").value});state.token=data.accessToken;localStorage.setItem("dola.tcp.token",state.token);setLoggedIn(data.user);await loadRecent()}catch(error){setMessage("authMessage",error.message)}finally{btn.disabled=false}};
+    $("logout").onclick=async()=>{try{await tcp("logout")}catch{}setLoggedOut()};
+    $("testApi").onclick=async()=>{try{const data=await tcp("health");const target=$("auth").classList.contains("hidden")?"generateMessage":"authMessage";setMessage(target,data.ok?`TLS/TCP 连接正常，证书指纹 ${state.lastFingerprint}`:"TCP 服务状态异常",Boolean(data.ok))}catch(error){const target=$("auth").classList.contains("hidden")?"generateMessage":"authMessage";setMessage(target,error.message)}};
+    $("resetTrust").onclick=()=>{const target=$("auth").classList.contains("hidden")?"generateMessage":"authMessage";try{const conn=connection();localStorage.removeItem(`dola.tcp.fingerprint.${conn.address}`);setMessage(target,"已清除该服务器的旧证书指纹，请重新检测连接",true)}catch(error){setMessage(target,error.message)}};
+    $("images").onchange=(e)=>{const files=Array.from(e.target.files||[]);if(files.length>10){e.target.value="";state.files=[];setMessage("generateMessage","参考图最多 10 张，请重新选择")}else{state.files=files;setMessage("generateMessage","")}$("fileList").innerHTML=state.files.map(file=>`<li title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</li>`).join("")};
+    async function loadVideo(data){if(state.loadedVideoRequestId===data.requestId)return;try{const conn=connection();const result=await window.dolaTcp.video(conn,{id:crypto.randomUUID(),token:state.token,requestId:data.requestId});rememberFingerprint(conn,result.fingerprint);state.videoFilePath=result.filePath;state.loadedVideoRequestId=data.requestId;$("video").src=result.fileUrl;$("video").classList.remove("hidden");$("videoLinkWrap").classList.remove("hidden")}catch(error){setMessage("generateMessage",error.message)}}
+    function showResult(data){$("emptyResult").classList.add("hidden");$("resultBody").classList.remove("hidden");$("refreshResult").classList.remove("hidden");$("status").textContent=data.status||"unknown";$("status").className=`pill ${data.status||""}`;$("requestId").textContent=data.requestId||state.requestId;$("resultMessage").textContent=data.message||"";$("json").textContent=JSON.stringify(data,null,2);if(data.status==="success")void loadVideo(data);else{$("video").classList.add("hidden");$("videoLinkWrap").classList.add("hidden")}}
+    async function poll(){if(!state.requestId)return;try{const data=await tcp("request.get",{requestId:state.requestId});showResult(data);await refreshMe();if(["success","failed","stopped"].includes(data.status)){await loadRecent();return}state.pollTimer=setTimeout(poll,2000)}catch(error){setMessage("generateMessage",error.message)}}
     $("refreshResult").onclick=()=>poll();
-    $("generateForm").onsubmit=async(e)=>{e.preventDefault();if(state.user?.credits<2){setMessage("generateMessage","积分不足，请联系服务提供方发放积分");return;}const btn=$("generate");btn.disabled=true;setMessage("generateMessage","");clearTimeout(state.pollTimer);try{const form=new FormData();form.append("prompt",$("prompt").value.trim());form.append("model","seedance_2_5");form.append("source","dola-user-client");state.files.forEach(file=>form.append("referenceImage",file,file.name));const data=await api("/api/generate",{method:"POST",body:form});state.requestId=data.requestId;showResult(data);await refreshMe();await loadRecent();state.pollTimer=setTimeout(poll,2000)}catch(error){setMessage("generateMessage",error.message);if(error.status===401)setLoggedOut();await refreshMe().catch(()=>{})}finally{btn.disabled=false}};
-
-    (async()=>{if(state.token&&baseUrl()){try{await refreshMe();await loadRecent()}catch{setLoggedOut()}}})();
+    $("videoLink").onclick=async()=>{if(!state.videoFilePath)return;const result=await window.dolaTcp.saveVideo(state.videoFilePath,`${state.requestId||"dola-video"}.mp4`);if(result.saved)setMessage("generateMessage",`视频已保存：${result.filePath}`,true)};
+    $("generateForm").onsubmit=async(e)=>{e.preventDefault();if(state.user?.credits<2){setMessage("generateMessage","积分不足，请联系服务提供方发放积分");return}const btn=$("generate");btn.disabled=true;setMessage("generateMessage","");clearTimeout(state.pollTimer);try{const images=await Promise.all(state.files.map(async file=>({name:file.name,type:file.type,data:await fileToBase64(file)})));const data=await tcp("generate",{prompt:$("prompt").value.trim(),images});state.requestId=data.requestId;state.loadedVideoRequestId="";showResult(data);await refreshMe();await loadRecent();state.pollTimer=setTimeout(poll,2000)}catch(error){setMessage("generateMessage",error.message);await refreshMe().catch(()=>{})}finally{btn.disabled=false}};
+    (async()=>{if(state.token&&$("apiBase").value.trim()){try{await refreshMe();await loadRecent()}catch{setLoggedOut()}}})();
   </script>
 </body>
 </html>

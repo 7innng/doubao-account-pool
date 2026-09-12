@@ -1,9 +1,10 @@
-# 本地 API
+# 服务端内部 HTTP API
 
 ## 基础信息
 
 - 默认地址：`http://127.0.0.1:17888`
-- 当前接口版本：`0.2.1`
+- 当前接口版本：`0.3.0`
+- 只监听服务端本机回环地址；普通用户请使用独立 TLS/TCP 客户端连接 `服务器IP:17889`。
 - 认证：`Authorization: Bearer <token>`
 - `/health`、`/api/auth/register`、`/api/auth/login` 无需登录；其余接口均需要 Bearer Token。
 - 首次运行会生成随机管理端 API Key。该 Key 可绕过用户积分，仅限服务端保管，不要发给普通用户。

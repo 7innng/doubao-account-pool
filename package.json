@@ -1,6 +1,6 @@
 {
   "name": "dola-account-manager",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Dola多账号隔离登录、额度调度和本地视频生成接口服务",
   "main": "dist-electron/main.js",
   "type": "module",
@@ -12,6 +12,7 @@
     "dist": "npm run build && electron-builder",
     "prepare:win-native": "node scripts/prepare-win-native.cjs",
     "dist:win": "npm run build && npm run prepare:win-native && electron-builder --config.npmRebuild=false --win nsis --x64",
+    "dist:win:portable": "npm run build && npm run prepare:win-native && electron-builder --config electron-builder.portable.yml --win portable --x64",
     "dist:client:win": "electron-builder --projectDir client --config ../electron-builder.client.yml --win nsis --x64",
     "test:unit": "npm run build && node --test tests/*.test.mjs",
     "test:watermark": "npm run build && node --test tests/watermark.test.mjs",
@@ -22,6 +23,7 @@
     "@vitejs/plugin-vue": "^5.2.4",
     "better-sqlite3": "^11.10.0",
     "electron-log": "^5.4.3",
+    "selfsigned": "^3.0.1",
     "vue": "^3.5.17"
   },
   "devDependencies": {

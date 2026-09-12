@@ -6,6 +6,7 @@ directories:
 files:
   - index.html
   - main.cjs
+  - preload.cjs
   - package.json
 electronVersion: 36.9.5
 npmRebuild: false
