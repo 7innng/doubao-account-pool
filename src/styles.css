@@ -349,6 +349,19 @@ textarea:focus {
   padding-top: 12px;
 }
 
+.credit-quick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: -6px;
+}
+
+.credit-balance-invalid {
+  border-color: #fecaca;
+  background: #fff1f2;
+  color: #b42318;
+}
+
 .pill {
   display: inline-flex;
   align-items: center;

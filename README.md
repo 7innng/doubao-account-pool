@@ -2,7 +2,7 @@
 
 Dola账号池是一款基于 Electron 的桌面服务端，用于管理多个相互隔离的Dola登录环境，并通过加密 TLS/TCP 接口向独立用户客户端提供视频生成能力。
 
-当前版本：`0.3.0`
+当前版本：`0.3.1`
 
 ## 主要功能
 
@@ -26,7 +26,7 @@ Dola账号池是一款基于 Electron 的桌面服务端，用于管理多个相
 
 请从 [Releases](../../releases/latest) 下载当前版本：
 
-- Windows 服务端：下载 `Dola账号池接口服务-0.3.0-win-x64.exe`，或使用免安装便携版。
+- Windows 服务端：下载 `Dola账号池接口服务-0.3.1-win-x64.exe`，或使用免安装便携版。
 - Windows 用户端：下载 `Dola API客户端-0.3.0-win-x64.exe`。
 
 macOS 应用已进行完整 ad-hoc 签名，避免因 Electron 临时签名不完整而显示“应用已损坏”。当前安装包尚未使用 Apple Developer ID 公证或 Windows 商业代码签名，Gatekeeper 或 SmartScreen 首次运行时仍可能显示来源提示。请核对发布页中的 SHA-256；macOS 首次尝试打开后，可进入“系统设置 > 隐私与安全性”，在安全性区域选择“仍要打开”。

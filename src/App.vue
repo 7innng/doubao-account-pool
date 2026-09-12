@@ -39,7 +39,7 @@ const operationLogs = ref<OperationLog[]>([]);
 const apiUsers = ref<ApiUser[]>([]);
 const creditLedger = ref<CreditLedgerEntry[]>([]);
 const apiStatus = ref<ApiServerStatus>({
-  version: "0.3.0",
+  version: "0.3.1",
   enabled: false,
   running: false,
   port: 0,
@@ -47,7 +47,7 @@ const apiStatus = ref<ApiServerStatus>({
   message: "未启动"
 });
 const tcpStatus = ref<TcpServerStatus>({
-  version: "0.3.0",
+  version: "0.3.1",
   enabled: true,
   running: false,
   host: "0.0.0.0",
@@ -78,12 +78,25 @@ const apiTestResultCopied = ref(false);
 const apiTestReferenceImages = ref<File[]>([]);
 const userFormError = ref("");
 const userFormSubmitting = ref(false);
+const creditEditingUser = ref<ApiUser | null>(null);
+const creditFormError = ref("");
+const creditFormSubmitting = ref(false);
 
 const userForm = reactive({
   username: "",
   password: "",
   role: "user" as ApiUserRole,
   initialCredits: 0
+});
+
+const creditForm = reactive({
+  amount: 10,
+  note: "管理员发放积分"
+});
+
+const creditBalanceAfter = computed(() => {
+  if (!creditEditingUser.value) return 0;
+  return creditEditingUser.value.credits + Math.trunc(Number(creditForm.amount) || 0);
 });
 
 const apiTestForm = reactive({
@@ -477,20 +490,46 @@ async function createApiUser() {
   }
 }
 
-async function adjustUserCredits(user: ApiUser) {
-  const rawAmount = window.prompt(`调整 ${user.username} 的积分。正数为发放，负数为扣减：`, "10");
-  if (rawAmount === null) return;
-  const amount = Math.trunc(Number(rawAmount));
+function adjustUserCredits(user: ApiUser) {
+  creditEditingUser.value = user;
+  creditForm.amount = 10;
+  creditForm.note = "管理员发放积分";
+  creditFormError.value = "";
+}
+
+function closeCreditEditor() {
+  if (creditFormSubmitting.value) return;
+  creditEditingUser.value = null;
+  creditFormError.value = "";
+}
+
+async function saveUserCredits() {
+  if (!creditEditingUser.value || creditFormSubmitting.value) return;
+  const amount = Math.trunc(Number(creditForm.amount));
   if (!amount) {
-    window.alert("请输入非零整数");
+    creditFormError.value = "请输入非零整数；正数为发放，负数为扣减。";
     return;
   }
-  const note = window.prompt("填写本次积分调整备注：", "管理员发放积分") ?? "管理员发放积分";
+  if (creditBalanceAfter.value < 0) {
+    creditFormError.value = "扣减后的积分不能小于 0。";
+    return;
+  }
+  creditFormSubmitting.value = true;
+  creditFormError.value = "";
   try {
-    await window.dolaManager.apiUsers.grant({ userId: user.id, amount, note });
+    await window.dolaManager.apiUsers.grant({
+      userId: creditEditingUser.value.id,
+      amount,
+      note: creditForm.note.trim() || "管理员调整积分"
+    });
     await refresh();
+    creditEditingUser.value = null;
   } catch (error) {
-    window.alert(error instanceof Error ? error.message : "积分调整失败");
+    creditFormError.value = error instanceof Error
+      ? error.message.replace(/^Error invoking remote method '[^']+': Error: /, "")
+      : "积分调整失败";
+  } finally {
+    creditFormSubmitting.value = false;
   }
 }
 
@@ -1493,6 +1532,46 @@ onBeforeUnmount(() => {
         <div v-else-if="!filteredOperationLogs.length" class="empty compact">没有符合条件的行动日志。</div>
       </div>
     </section>
+
+    <div v-if="creditEditingUser" class="modal-backdrop" @click.self="closeCreditEditor">
+      <form class="modal credit-editor-modal" @submit.prevent="saveUserCredits">
+        <div class="modal-header">
+          <div>
+            <h2>调整用户积分</h2>
+            <p>{{ creditEditingUser.username }} · 当前 {{ creditEditingUser.credits }} 积分</p>
+          </div>
+          <button class="icon-button" type="button" :disabled="creditFormSubmitting" @click="closeCreditEditor">关闭</button>
+        </div>
+
+        <label>
+          <span>积分变动</span>
+          <input v-model.number="creditForm.amount" type="number" step="1" required autofocus />
+        </label>
+        <div class="credit-quick-actions">
+          <button class="button compact-button" type="button" @click="creditForm.amount = 2">+2</button>
+          <button class="button compact-button" type="button" @click="creditForm.amount = 10">+10</button>
+          <button class="button compact-button" type="button" @click="creditForm.amount = 20">+20</button>
+          <button class="button compact-button" type="button" @click="creditForm.amount = -2">-2</button>
+        </div>
+        <label>
+          <span>备注</span>
+          <input v-model="creditForm.note" maxlength="200" placeholder="例如：充值、活动赠送或人工扣减" />
+        </label>
+        <div class="readonly-quota" :class="{ 'credit-balance-invalid': creditBalanceAfter < 0 }">
+          <span>调整后余额</span>
+          <strong>{{ creditBalanceAfter }}</strong>
+        </div>
+        <p class="form-hint">输入正整数发放积分，输入负整数扣减积分。Seedance 2.5 每次消耗 2 积分。</p>
+        <p v-if="creditFormError" class="api-test-error">{{ creditFormError }}</p>
+
+        <div class="modal-actions">
+          <button class="button primary" type="submit" :disabled="creditFormSubmitting">
+            {{ creditFormSubmitting ? "正在保存…" : "确认调整" }}
+          </button>
+          <button class="button" type="button" :disabled="creditFormSubmitting" @click="closeCreditEditor">取消</button>
+        </div>
+      </form>
+    </div>
 
     <div v-if="selectedRequest" class="modal-backdrop" @click.self="closeRequestDetails">
       <section class="modal request-detail-modal" role="dialog" aria-modal="true" aria-labelledby="request-detail-title">

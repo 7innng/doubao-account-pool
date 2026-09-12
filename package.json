@@ -1,6 +1,6 @@
 {
   "name": "dola-account-manager",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Dola多账号隔离登录、额度调度和本地视频生成接口服务",
   "main": "dist-electron/main.js",
   "type": "module",
