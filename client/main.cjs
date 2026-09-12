@@ -65,10 +65,13 @@ function tcpRequest(connection, command) {
       return;
     }
     const socket = tls.connect({ host, port, rejectUnauthorized: false, minVersion: "TLSv1.2" });
-    let pending = Buffer.alloc(0);
+    const responseHeader = Buffer.allocUnsafe(4);
+    let responseHeaderBytes = 0;
+    let responseBody = null;
+    let responseBodyBytes = 0;
     let expectedLength = null;
     let settled = false;
-    const timeoutMs = command?.action === "video.get" ? 10 * 60 * 1000 : 120000;
+    const timeoutMs = ["generate", "video.get"].includes(command?.action) ? 10 * 60 * 1000 : 120000;
     const timer = setTimeout(() => socket.destroy(new Error("TCP 请求超时")), timeoutMs);
     const finish = (error, value) => {
       if (settled) return;
@@ -78,6 +81,7 @@ function tcpRequest(connection, command) {
       error ? reject(error) : resolve(value);
     };
     socket.once("secureConnect", () => {
+      socket.setKeepAlive(true, 30000);
       const certificate = socket.getPeerCertificate();
       const fingerprint = String(certificate.fingerprint256 || "");
       if (!fingerprint) return finish(new Error("无法读取服务器 TLS 证书指纹"));
@@ -91,15 +95,27 @@ function tcpRequest(connection, command) {
       socket.write(Buffer.concat([header, body]));
     });
     socket.on("data", (chunk) => {
-      pending = Buffer.concat([pending, chunk]);
-      if (expectedLength === null && pending.length >= 4) {
-        expectedLength = pending.readUInt32BE(0);
-        pending = pending.subarray(4);
-        if (expectedLength < 1 || expectedLength > MAX_FRAME_BYTES) return finish(new Error("TCP 响应长度无效"));
-      }
-      if (expectedLength !== null && pending.length >= expectedLength) {
+      let offset = 0;
+      while (!settled && offset < chunk.length) {
+        if (expectedLength === null) {
+          const headerCopyBytes = Math.min(4 - responseHeaderBytes, chunk.length - offset);
+          chunk.copy(responseHeader, responseHeaderBytes, offset, offset + headerCopyBytes);
+          responseHeaderBytes += headerCopyBytes;
+          offset += headerCopyBytes;
+          if (responseHeaderBytes < 4) continue;
+          expectedLength = responseHeader.readUInt32BE(0);
+          if (expectedLength < 1 || expectedLength > MAX_FRAME_BYTES) return finish(new Error("TCP 响应长度无效"));
+          responseBody = Buffer.allocUnsafe(expectedLength);
+        }
+
+        const bodyCopyBytes = Math.min(expectedLength - responseBodyBytes, chunk.length - offset);
+        chunk.copy(responseBody, responseBodyBytes, offset, offset + bodyCopyBytes);
+        responseBodyBytes += bodyCopyBytes;
+        offset += bodyCopyBytes;
+        if (responseBodyBytes < expectedLength) continue;
+
         try {
-          const payload = JSON.parse(pending.subarray(0, expectedLength).toString("utf8"));
+          const payload = JSON.parse(responseBody.toString("utf8"));
           const fingerprint = String(socket.getPeerCertificate().fingerprint256 || "");
           if (!payload.ok) return finish(new Error(payload.error || "TCP 请求失败"));
           finish(null, { data: payload.data, fingerprint });
