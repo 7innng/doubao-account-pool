@@ -20,6 +20,7 @@ interface ApiTestResponse {
   status?: ApiRequestStatus;
   message?: string;
   model?: DolaModel;
+  referenceImageCount?: number;
   cleanVideoUrl?: string | null;
   outputVideoPath?: string | null;
   createdAt?: string;
@@ -58,6 +59,7 @@ const apiTestPolling = ref(false);
 const apiTestError = ref("");
 const apiTestResult = ref<ApiTestResponse | null>(null);
 const apiTestResultCopied = ref(false);
+const apiTestReferenceImages = ref<File[]>([]);
 
 const apiTestForm = reactive({
   model: "seedance_2_5" as DolaModel,
@@ -70,7 +72,7 @@ const apiTestForm = reactive({
 
 const accountSettingsForm = reactive({
   remark: "",
-  dailyQuotaLimit: 10,
+  dailyQuotaLimit: 4,
   quotaUsedToday: 0
 });
 
@@ -82,10 +84,10 @@ const settingsForm = reactive<AppSettings>({
   showExecutorWindow: false,
   autoCloseExecutorWindow: true,
   dolaChatUrl: "https://www.dola.com/chat",
-  defaultModel: "seedance_2_0",
-  dailyQuotaLimit: 10,
+  defaultModel: "seedance_2_5",
+  dailyQuotaLimit: 4,
   seedance20Cost: 2,
-  seedance25Cost: 3,
+  seedance25Cost: 2,
   dailyResetTime: "00:00",
   generationTimeoutSeconds: 900,
   maxConcurrentAccounts: 4,
@@ -118,7 +120,7 @@ const requestLabels: Record<ApiRequestStatus, string> = {
 };
 
 const modelLabels: Record<DolaModel, string> = {
-  seedance_2_0: "Seedance 2.0",
+  seedance_2_0: "Seedance 2.0（历史）",
   seedance_2_5: "Seedance 2.5（扩展支持 30 秒）"
 };
 
@@ -179,10 +181,6 @@ const accountQuotaSummary = computed(() => {
     remaining,
     used,
     usedPercent: total > 0 ? Math.min(100, (used / total) * 100) : 0,
-    seedance20Runs: accounts.value.reduce(
-      (sum, account) => sum + remainingGenerations(account, "seedance_2_0"),
-      0
-    ),
     seedance25Runs: accounts.value.reduce(
       (sum, account) => sum + remainingGenerations(account, "seedance_2_5"),
       0
@@ -190,11 +188,7 @@ const accountQuotaSummary = computed(() => {
   };
 });
 
-const apiTestModelCost = computed(() =>
-  apiTestForm.model === "seedance_2_0"
-    ? Math.max(1, Number(settingsForm.seedance20Cost) || 1)
-    : Math.max(1, Number(settingsForm.seedance25Cost) || 1)
-);
+const apiTestModelCost = computed(() => Math.max(1, Number(settingsForm.seedance25Cost) || 2));
 
 const apiTestEligibleAccounts = computed(() =>
   accounts.value.filter((account) =>
@@ -226,11 +220,11 @@ const filteredAccounts = computed(() => {
 const apiExample = computed(() => {
   const port = settingsForm.apiPort || 17888;
   const token = settingsForm.apiKey || "local-dola-key";
-  return `# 共享额度：账号每日 ${settingsForm.dailyQuotaLimit}，Seedance 2.0 每次扣 ${settingsForm.seedance20Cost}，Seedance 2.5 每次扣 ${settingsForm.seedance25Cost}
+  return `# 每个账号默认额度 ${settingsForm.dailyQuotaLimit}，Seedance 2.5 每次扣 ${settingsForm.seedance25Cost}
 curl -X POST http://127.0.0.1:${port}/api/generate \\
   -H "Authorization: Bearer ${token}" \\
-  -F "model=seedance_2_0" \\
-  -F "prompt=生成一段 10 秒女性科普动画" \\
+  -F "model=seedance_2_5" \\
+  -F "prompt=生成一段 30 秒女性科普动画" \\
   -F "referenceImage=@/Users/your-name/Pictures/ref.png" \\
   -F "removeWatermark=true" \\
   -F "callbackUrl=http://127.0.0.1:3000/dola/callback"`;
@@ -256,8 +250,9 @@ function localApiBaseUrl() {
   return apiStatus.value.url || `http://127.0.0.1:${Number(settingsForm.apiPort) || 17888}`;
 }
 
-function apiTestHeaders() {
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
+function apiTestHeaders(json = false) {
+  const headers: Record<string, string> = {};
+  if (json) headers["Content-Type"] = "application/json";
   const token = settingsForm.apiKey.trim();
   if (token) headers.Authorization = `Bearer ${token}`;
   return headers;
@@ -310,6 +305,25 @@ async function pollApiTestRequest(requestId: string) {
   }
 }
 
+function selectApiTestImages(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const files = Array.from(input.files || []);
+  apiTestError.value = "";
+  if (files.length > 10) {
+    apiTestReferenceImages.value = [];
+    input.value = "";
+    apiTestError.value = "参考图最多只能选择 10 张，请重新选择";
+    return;
+  }
+  apiTestReferenceImages.value = files;
+}
+
+function clearApiTestImages() {
+  apiTestReferenceImages.value = [];
+  const input = document.querySelector<HTMLInputElement>("#api-test-reference-images");
+  if (input) input.value = "";
+}
+
 async function submitApiTest() {
   const prompt = apiTestForm.prompt.trim();
   if (!prompt) {
@@ -334,18 +348,33 @@ async function submitApiTest() {
       await window.dolaManager.settings.update({ showExecutorWindow: apiTestForm.showBrowserWindow });
       settingsForm.showExecutorWindow = apiTestForm.showBrowserWindow;
     }
+    const requestBody = {
+      model: "seedance_2_5" as const,
+      prompt,
+      referenceImagePath: apiTestForm.referenceImagePath.trim() || null,
+      referenceImageUrl: apiTestForm.referenceImageUrl.trim() || null,
+      callbackUrl: apiTestForm.callbackUrl.trim() || null,
+      removeWatermark: true,
+      source: "embedded-api-tester"
+    };
+    let body: BodyInit;
+    let headers: Record<string, string>;
+    if (apiTestReferenceImages.value.length) {
+      const form = new FormData();
+      Object.entries(requestBody).forEach(([key, value]) => {
+        if (value !== null) form.append(key, String(value));
+      });
+      apiTestReferenceImages.value.forEach((file) => form.append("referenceImage", file, file.name));
+      body = form;
+      headers = apiTestHeaders();
+    } else {
+      body = JSON.stringify(requestBody);
+      headers = apiTestHeaders(true);
+    }
     const response = await fetch(`${localApiBaseUrl()}/api/generate`, {
       method: "POST",
-      headers: apiTestHeaders(),
-      body: JSON.stringify({
-        model: apiTestForm.model,
-        prompt,
-        referenceImagePath: apiTestForm.referenceImagePath.trim() || null,
-        referenceImageUrl: apiTestForm.referenceImageUrl.trim() || null,
-        callbackUrl: apiTestForm.callbackUrl.trim() || null,
-        removeWatermark: true,
-        source: "embedded-api-tester"
-      })
+      headers,
+      body
     });
     const payload = await readApiResponse(response);
     apiTestResult.value = payload;
@@ -599,7 +628,7 @@ function accountCode(account: Account) {
 }
 
 function minimumQuotaCost() {
-  return Math.min(Number(settingsForm.seedance20Cost) || 2, Number(settingsForm.seedance25Cost) || 3);
+  return Number(settingsForm.seedance25Cost) || 2;
 }
 
 function isQuotaExhausted(account: Account) {
@@ -764,11 +793,7 @@ onBeforeUnmount(() => {
             <span :style="{ width: `${accountQuotaSummary.usedPercent}%` }"></span>
           </div>
         </div>
-        <div role="listitem" title="全部剩余额度只用于 Seedance 2.0 时的预计次数">
-          <span>2.0 预计</span>
-          <strong>{{ accountQuotaSummary.seedance20Runs }} 次</strong>
-        </div>
-        <div role="listitem" title="全部剩余额度只用于 Seedance 2.5 时的预计次数；与 2.0 预计次数不可相加">
+        <div role="listitem" title="当前仅使用 Seedance 2.5，每次消耗 2 点本地额度">
           <span>2.5 预计</span>
           <strong>{{ accountQuotaSummary.seedance25Runs }} 次</strong>
         </div>
@@ -847,7 +872,6 @@ onBeforeUnmount(() => {
                   <span :style="{ width: `${quotaUsedPercent(account)}%` }"></span>
                 </div>
                 <div class="quota-models">
-                  <span>2.0 可生成 {{ remainingGenerations(account, 'seedance_2_0') }} 次</span>
                   <span>2.5 可生成 {{ remainingGenerations(account, 'seedance_2_5') }} 次</span>
                 </div>
               </td>
@@ -909,8 +933,7 @@ onBeforeUnmount(() => {
         <div class="form-section wide">
           <label>
             <span>模型</span>
-            <select v-model="apiTestForm.model">
-              <option value="seedance_2_0">{{ modelLabels.seedance_2_0 }}</option>
+            <select v-model="apiTestForm.model" disabled>
               <option value="seedance_2_5">{{ modelLabels.seedance_2_5 }}</option>
             </select>
           </label>
@@ -925,13 +948,34 @@ onBeforeUnmount(() => {
 
         <div class="form-section">
           <h3>参考图（可选）</h3>
-          <p class="form-hint">本地路径优先；也可以填写可公开访问的图片 URL。</p>
+          <p class="form-hint">支持一次批量选择，所有来源合计最多 10 张。</p>
+          <label class="api-test-file-picker">
+            <span>批量选择图片（最多 10 张）</span>
+            <input
+              id="api-test-reference-images"
+              type="file"
+              accept="image/*"
+              multiple
+              @change="selectApiTestImages"
+            />
+          </label>
+          <div v-if="apiTestReferenceImages.length" class="api-test-selected-images">
+            <div>
+              <strong>已选择 {{ apiTestReferenceImages.length }} 张</strong>
+              <button class="icon-button" type="button" @click="clearApiTestImages">清空</button>
+            </div>
+            <ol>
+              <li v-for="file in apiTestReferenceImages" :key="`${file.name}-${file.size}-${file.lastModified}`">
+                {{ file.name }}
+              </li>
+            </ol>
+          </div>
           <label>
-            <span>本地图片绝对路径</span>
+            <span>本地图片绝对路径（兼容单张调用）</span>
             <input v-model="apiTestForm.referenceImagePath" placeholder="/Users/your-name/Pictures/ref.png" />
           </label>
           <label>
-            <span>图片 URL</span>
+            <span>图片 URL（兼容单张调用）</span>
             <input v-model="apiTestForm.referenceImageUrl" type="url" placeholder="https://example.com/ref.png" />
           </label>
         </div>
@@ -1020,11 +1064,10 @@ onBeforeUnmount(() => {
 
         <div class="form-section">
           <h3>模型额度</h3>
-          <p class="form-hint">Dola 账号共用本地额度账本；Seedance 2.0 与 2.5 可分别配置消耗。</p>
+          <p class="form-hint">固定自动选择 Seedance 2.5；新账号默认 4 点，每次生成消耗 2 点。</p>
           <label>
             <span>默认模型</span>
-            <select v-model="settingsForm.defaultModel">
-              <option value="seedance_2_0">{{ modelLabels.seedance_2_0 }}</option>
+            <select v-model="settingsForm.defaultModel" disabled>
               <option value="seedance_2_5">{{ modelLabels.seedance_2_5 }}</option>
             </select>
           </label>
@@ -1033,12 +1076,8 @@ onBeforeUnmount(() => {
             <input v-model.number="settingsForm.dailyQuotaLimit" type="number" min="0" />
           </label>
           <label>
-            <span>Seedance 2.0 单次消耗</span>
-            <input v-model.number="settingsForm.seedance20Cost" type="number" min="1" />
-          </label>
-          <label>
             <span>Seedance 2.5 单次消耗</span>
-            <input v-model.number="settingsForm.seedance25Cost" type="number" min="1" />
+            <input v-model.number="settingsForm.seedance25Cost" type="number" min="2" max="2" disabled />
           </label>
           <label>
             <span>每日重置时间</span>
@@ -1304,7 +1343,7 @@ onBeforeUnmount(() => {
           </div>
           <div>
             <dt>参考图</dt>
-            <dd class="detail-path">{{ selectedRequest.referenceImagePath || "未提供" }}</dd>
+            <dd class="detail-path">{{ selectedRequest.referenceImagePaths.length ? selectedRequest.referenceImagePaths.join("\n") : "未提供" }}</dd>
           </div>
         </dl>
 
@@ -1370,7 +1409,7 @@ onBeforeUnmount(() => {
         </div>
 
         <div class="quota-note">
-          Seedance 2.0 每次消耗 {{ settingsForm.seedance20Cost }} 额度；Seedance 2.5 每次消耗 {{ settingsForm.seedance25Cost }} 额度。账号池首页只读显示，避免误改。
+          当前只使用 Seedance 2.5，每次消耗 2 点本地额度；默认总额度 4 点，可生成 2 次。
         </div>
 
         <div class="modal-actions">

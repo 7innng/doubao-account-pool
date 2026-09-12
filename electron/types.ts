@@ -69,6 +69,7 @@ export interface ApiRequest {
   message: string;
   prompt: string;
   referenceImagePath: string | null;
+  referenceImagePaths: string[];
   removeWatermark: boolean;
   callbackUrl: string | null;
   dolaThreadUrl: string | null;
@@ -89,6 +90,7 @@ export interface ApiRequestCreateInput {
   message?: string;
   prompt: string;
   referenceImagePath?: string | null;
+  referenceImagePaths?: string[];
   removeWatermark?: boolean;
   callbackUrl?: string | null;
 }
@@ -139,6 +141,8 @@ export interface GenerateRequestBody {
   prompt: string;
   referenceImagePath?: string | null;
   referenceImageUrl?: string | null;
+  referenceImagePaths?: string[];
+  referenceImageUrls?: string[];
   removeWatermark?: boolean;
   callbackUrl?: string | null;
   source?: string;

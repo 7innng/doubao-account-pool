@@ -143,13 +143,14 @@ class LocalApiServer {
           return;
         }
 
-        const model = normalizeModel(body.model || settings.defaultModel);
+        const model = normalizeModel(body.model || "seedance_2_5");
         if (!model) {
           sendJson(response, 400, { error: "unsupported model" });
           return;
         }
 
-        const referenceImagePath = await prepareReferenceImage(body, requestId);
+        const referenceImagePaths = await prepareReferenceImages(body, requestId);
+        const referenceImagePath = referenceImagePaths[0] || null;
         const account = settings.executorEnabled
           ? this.database.reserveAvailableAccount(model)
           : this.database.findAvailableAccount(model);
@@ -164,6 +165,7 @@ class LocalApiServer {
             message: "没有可用账号，或该模型剩余额度不足",
             prompt,
             referenceImagePath,
+            referenceImagePaths,
             removeWatermark: true,
             callbackUrl: body.callbackUrl
           });
@@ -191,6 +193,7 @@ class LocalApiServer {
             : `已接收，已预扣 ${cost} 额度，自动执行已关闭`,
           prompt,
           referenceImagePath,
+          referenceImagePaths,
           removeWatermark: true,
           callbackUrl: body.callbackUrl
         });
@@ -287,7 +290,7 @@ class LocalApiServer {
       sendJson(response, 404, { error: "not found" });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
-      sendJson(response, 500, { error: message });
+      sendJson(response, message.includes("参考图最多只能选择 10 张") ? 400 : 500, { error: message });
     }
   }
 }
@@ -469,7 +472,7 @@ function notifyDataChanged() {
 }
 
 function normalizeModel(model: string): DolaModel | null {
-  if (model === "seedance_2_0" || model === "seedance_2_5") return model;
+  if (model === "seedance_2_5") return model;
   return null;
 }
 
@@ -505,7 +508,7 @@ async function parseMultipartGenerateRequest(buffer: Buffer, contentType: string
   if (!boundary) throw new Error("multipart boundary is required");
 
   const fields: Record<string, string> = {};
-  let uploadedReferenceImagePath: string | null = null;
+  const uploadedReferenceImagePaths: string[] = [];
   const delimiter = Buffer.from(`--${boundary}`);
 
   for (const rawPart of splitBuffer(buffer, delimiter)) {
@@ -524,14 +527,16 @@ async function parseMultipartGenerateRequest(buffer: Buffer, contentType: string
     if (!disposition.name) continue;
 
     if (disposition.filename) {
-      if (!uploadedReferenceImagePath && body.length > 0) {
-        uploadedReferenceImagePath = await saveUploadedFile({
+      if (body.length > 0) {
+        if (uploadedReferenceImagePaths.length >= 10) throw new Error("参考图最多只能选择 10 张");
+        uploadedReferenceImagePaths.push(await saveUploadedFile({
           requestId,
           fieldName: disposition.name,
           filename: disposition.filename,
           contentType: headers["content-type"],
-          bytes: body
-        });
+          bytes: body,
+          sequence: uploadedReferenceImagePaths.length + 1
+        }));
       }
       continue;
     }
@@ -542,7 +547,8 @@ async function parseMultipartGenerateRequest(buffer: Buffer, contentType: string
   return {
     model: fields.model as DolaModel | undefined,
     prompt: fields.prompt || "",
-    referenceImagePath: uploadedReferenceImagePath || fields.referenceImagePath || null,
+    referenceImagePath: uploadedReferenceImagePaths[0] || fields.referenceImagePath || null,
+    referenceImagePaths: uploadedReferenceImagePaths,
     referenceImageUrl: fields.referenceImageUrl || null,
     removeWatermark: parseOptionalBoolean(fields.removeWatermark),
     callbackUrl: fields.callbackUrl || null,
@@ -550,24 +556,39 @@ async function parseMultipartGenerateRequest(buffer: Buffer, contentType: string
   };
 }
 
-async function prepareReferenceImage(body: GenerateRequestBody, requestId: string) {
-  if (body.referenceImagePath?.trim()) return body.referenceImagePath.trim();
-  const imageUrl = body.referenceImageUrl?.trim();
-  if (!imageUrl) return null;
-
-  const response = await fetch(imageUrl);
-  if (!response.ok) {
-    throw new Error(`参考图下载失败：HTTP ${response.status}`);
+async function prepareReferenceImages(body: GenerateRequestBody, requestId: string) {
+  const normalizeStrings = (items: unknown[]) => items
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const localPaths = normalizeStrings([
+    ...(Array.isArray(body.referenceImagePaths) ? body.referenceImagePaths : []),
+    body.referenceImagePath || ""
+  ]);
+  const imageUrls = normalizeStrings([
+    ...(Array.isArray(body.referenceImageUrls) ? body.referenceImageUrls : []),
+    body.referenceImageUrl || ""
+  ]);
+  const uniquePaths = [...new Set(localPaths)];
+  const uniqueUrls = [...new Set(imageUrls)];
+  if (uniquePaths.length + uniqueUrls.length > 10) {
+    throw new Error("参考图最多只能选择 10 张");
   }
 
-  const contentType = response.headers.get("content-type") || "";
-  const urlExt = path.extname(new URL(imageUrl).pathname);
-  const ext = urlExt || extensionFromContentType(contentType) || ".png";
-  const uploadDir = path.join(app.getPath("userData"), "uploads", new Date().toISOString().slice(0, 10));
-  await fs.mkdir(uploadDir, { recursive: true });
-  const imagePath = path.join(uploadDir, `${requestId}-reference${ext}`);
-  await fs.writeFile(imagePath, Buffer.from(await response.arrayBuffer()));
-  return imagePath;
+  const result = [...uniquePaths];
+  for (const [index, imageUrl] of uniqueUrls.entries()) {
+    const response = await fetch(imageUrl);
+    if (!response.ok) throw new Error(`第 ${index + 1} 张参考图下载失败：HTTP ${response.status}`);
+    const contentType = response.headers.get("content-type") || "";
+    const urlExt = path.extname(new URL(imageUrl).pathname);
+    const ext = urlExt || extensionFromContentType(contentType) || ".png";
+    const uploadDir = path.join(app.getPath("userData"), "uploads", new Date().toISOString().slice(0, 10));
+    await fs.mkdir(uploadDir, { recursive: true });
+    const imagePath = path.join(uploadDir, `${requestId}-reference-${result.length + 1}${ext}`);
+    await fs.writeFile(imagePath, Buffer.from(await response.arrayBuffer()));
+    result.push(imagePath);
+  }
+  return result;
 }
 
 async function saveUploadedFile(input: {
@@ -576,11 +597,12 @@ async function saveUploadedFile(input: {
   filename: string;
   contentType?: string;
   bytes: Buffer;
+  sequence?: number;
 }) {
   const safeName = sanitizeFilename(input.filename || `${input.fieldName}${extensionFromContentType(input.contentType) || ".png"}`);
   const uploadDir = path.join(app.getPath("userData"), "uploads", new Date().toISOString().slice(0, 10));
   await fs.mkdir(uploadDir, { recursive: true });
-  const filePath = path.join(uploadDir, `${input.requestId}-${input.fieldName}-${safeName}`);
+  const filePath = path.join(uploadDir, `${input.requestId}-${input.fieldName}-${input.sequence || 1}-${safeName}`);
   await fs.writeFile(filePath, input.bytes);
   return filePath;
 }

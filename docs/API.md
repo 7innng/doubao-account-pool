@@ -34,16 +34,18 @@ Content-Type: multipart/form-data
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
 | `prompt` | 是 | 视频提示词 |
-| `model` | 否 | `seedance_2_0` 或 `seedance_2_5` |
-| `referenceImage` | 否 | 上传的参考图片文件 |
+| `model` | 否 | 仅支持 `seedance_2_5`；不传时自动选择 |
+| `referenceImage` | 否 | 上传的参考图片文件；可重复传入，合计最多 10 张 |
 | `referenceImagePath` | 否 | 本机参考图片绝对路径 |
 | `referenceImageUrl` | 否 | 可下载的参考图片 URL |
+| `referenceImagePaths` | 否 | JSON 请求中的本机图片路径数组，最多 10 张 |
+| `referenceImageUrls` | 否 | JSON 请求中的图片 URL 数组，最多 10 张 |
 | `callbackUrl` | 否 | 状态变化时接收 JSON 的回调地址 |
 | `source` | 否 | 请求来源名称 |
 
 生成请求固定执行最终 MP4 结果验证。去水印失败、平台不支持或没有取得可播放 MP4 时，任务状态为 `failed`。
 
-选择 `seedance_2_5` 时，执行器会在真正发送前确认Dola页面处于视频生成模式、模型为 Seedance 2.5、工具栏显示 `30s` 且内置扩展已开启。任一条件不满足会直接返回失败，不会误发成较短时长。软件内的“API 调试”页可以提交同一个接口，并自动轮询最终结果；勾选“显示 Dola 浏览器执行窗口”可现场观察执行过程。
+执行器固定选择 Seedance 2.5，并在真正发送前确认Dola页面处于视频生成模式、模型为 Seedance 2.5、工具栏显示 `30s` 且内置扩展已开启。任一条件不满足会直接返回失败，不会误发成其他模型或较短时长。软件内的“API 调试”页支持一次选择最多 10 张参考图、提交同一个接口并自动轮询最终结果；勾选“显示 Dola 浏览器执行窗口”可现场观察执行过程。
 
 ## 查询任务状态
 

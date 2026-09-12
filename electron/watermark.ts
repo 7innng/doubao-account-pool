@@ -9,6 +9,7 @@ const VIDEO_URL_KEYS = [
   "play_url",
   "url"
 ];
+const STRONG_VIDEO_URL_KEYS = new Set(VIDEO_URL_KEYS.filter((key) => key !== "url"));
 
 const UNSUPPORTED_RE = /平台暂不支持|暂不支持|不支持该平台|unsupported platform|not supported/i;
 // The provider may return before its clean MP4/CDN object is ready. Use a
@@ -163,8 +164,8 @@ export function extractVideoUrlFromPayload(value: unknown): string | null {
   const record = value as Record<string, unknown>;
   for (const key of VIDEO_URL_KEYS) {
     const item = record[key];
-    if (typeof item === "string" && isMp4VideoUrl(item)) {
-      return item;
+    if (typeof item === "string" && (isMp4VideoUrl(item) || (STRONG_VIDEO_URL_KEYS.has(key) && isHttpUrl(item)))) {
+      return withMp4ExtensionHint(item);
     }
   }
 
@@ -189,6 +190,28 @@ export function isMp4VideoUrl(value: string) {
   }
 }
 
+export function withMp4ExtensionHint(value: string) {
+  if (isMp4VideoUrl(value)) return value;
+  try {
+    const url = new URL(value);
+    if (!/^https?:$/.test(url.protocol)) return value;
+    // A URL fragment is not sent to the CDN, so this gives filename-sensitive
+    // consumers an .mp4 suffix without invalidating a signed download URL.
+    url.hash = "video.mp4";
+    return url.toString();
+  } catch {
+    return value;
+  }
+}
+
+function isHttpUrl(value: string) {
+  try {
+    return /^https?:$/.test(new URL(value).protocol);
+  } catch {
+    return false;
+  }
+}
+
 export async function verifyPlayableVideoUrl(url: string) {
   let response: Response;
   try {
@@ -202,7 +225,7 @@ export async function verifyPlayableVideoUrl(url: string) {
   }
 
   const contentType = (response.headers.get("content-type") || "").toLowerCase();
-  const videoContent = contentType.startsWith("video/") || contentType.includes("application/octet-stream");
+  const videoContent = contentType.startsWith("video/") || contentType.includes("octet-stream");
   await response.body?.cancel().catch(() => undefined);
 
   if (!response.ok || !videoContent) {

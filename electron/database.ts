@@ -28,10 +28,10 @@ const DEFAULT_SETTINGS: AppSettings = {
   showExecutorWindow: false,
   autoCloseExecutorWindow: true,
   dolaChatUrl: "https://www.dola.com/chat",
-  defaultModel: "seedance_2_0",
-  dailyQuotaLimit: 10,
+  defaultModel: "seedance_2_5",
+  dailyQuotaLimit: 4,
   seedance20Cost: 2,
-  seedance25Cost: 3,
+  seedance25Cost: 2,
   dailyResetTime: "00:00",
   generationTimeoutSeconds: 900,
   maxConcurrentAccounts: 4,
@@ -61,8 +61,8 @@ export class AppDatabase {
         remark TEXT NOT NULL DEFAULT '',
         login_status TEXT NOT NULL DEFAULT 'unknown',
         current_status TEXT NOT NULL DEFAULT 'idle',
-        daily_quota_limit INTEGER NOT NULL DEFAULT 10,
-        quota_remaining INTEGER NOT NULL DEFAULT 10,
+        daily_quota_limit INTEGER NOT NULL DEFAULT 4,
+        quota_remaining INTEGER NOT NULL DEFAULT 4,
         quota_used_today INTEGER NOT NULL DEFAULT 0,
         last_used_at TEXT,
         created_at TEXT NOT NULL,
@@ -85,6 +85,7 @@ export class AppDatabase {
         message TEXT NOT NULL DEFAULT '',
         prompt TEXT NOT NULL,
         reference_image_path TEXT,
+        reference_image_paths TEXT,
         remove_watermark INTEGER NOT NULL DEFAULT 1,
         callback_url TEXT,
         dola_thread_url TEXT,
@@ -368,9 +369,10 @@ export class AppDatabase {
       showExecutorWindow: Boolean(input.showExecutorWindow ?? current.showExecutorWindow),
       autoCloseExecutorWindow: Boolean(input.autoCloseExecutorWindow ?? current.autoCloseExecutorWindow),
       dolaChatUrl: String(input.dolaChatUrl || current.dolaChatUrl || DEFAULT_SETTINGS.dolaChatUrl),
+      defaultModel: "seedance_2_5",
       dailyQuotaLimit: clampInt(input.dailyQuotaLimit ?? current.dailyQuotaLimit),
       seedance20Cost: Math.max(1, clampInt(input.seedance20Cost ?? current.seedance20Cost)),
-      seedance25Cost: Math.max(1, clampInt(input.seedance25Cost ?? current.seedance25Cost)),
+      seedance25Cost: 2,
       generationTimeoutSeconds: clampInt(input.generationTimeoutSeconds ?? current.generationTimeoutSeconds),
       maxConcurrentAccounts: Math.max(1, clampInt(input.maxConcurrentAccounts ?? current.maxConcurrentAccounts)),
       retryCount: clampInt(input.retryCount ?? current.retryCount)
@@ -405,6 +407,7 @@ export class AppDatabase {
         api_requests.message,
         api_requests.prompt,
         api_requests.reference_image_path AS referenceImagePath,
+        api_requests.reference_image_paths AS referenceImagePathsJson,
         api_requests.remove_watermark AS removeWatermark,
         api_requests.callback_url AS callbackUrl,
         api_requests.dola_thread_url AS dolaThreadUrl,
@@ -435,6 +438,7 @@ export class AppDatabase {
         api_requests.message,
         api_requests.prompt,
         api_requests.reference_image_path AS referenceImagePath,
+        api_requests.reference_image_paths AS referenceImagePathsJson,
         api_requests.remove_watermark AS removeWatermark,
         api_requests.callback_url AS callbackUrl,
         api_requests.dola_thread_url AS dolaThreadUrl,
@@ -463,13 +467,14 @@ export class AppDatabase {
         message,
         prompt,
         reference_image_path,
+        reference_image_paths,
         remove_watermark,
         callback_url,
         created_at,
         updated_at,
         finished_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       input.requestId,
       input.source || "local-api",
@@ -479,6 +484,7 @@ export class AppDatabase {
       input.message || "",
       input.prompt,
       input.referenceImagePath || null,
+      JSON.stringify(input.referenceImagePaths || (input.referenceImagePath ? [input.referenceImagePath] : [])),
       input.removeWatermark === false ? 0 : 1,
       input.callbackUrl || null,
       timestamp,
@@ -635,8 +641,8 @@ export class AppDatabase {
     this.addColumnIfMissing("accounts", "name", "TEXT NOT NULL DEFAULT ''");
     this.addColumnIfMissing("accounts", "remark", "TEXT NOT NULL DEFAULT ''");
     this.addColumnIfMissing("accounts", "current_status", "TEXT NOT NULL DEFAULT 'idle'");
-    this.addColumnIfMissing("accounts", "daily_quota_limit", "INTEGER NOT NULL DEFAULT 10");
-    this.addColumnIfMissing("accounts", "quota_remaining", "INTEGER NOT NULL DEFAULT 10");
+    this.addColumnIfMissing("accounts", "daily_quota_limit", "INTEGER NOT NULL DEFAULT 4");
+    this.addColumnIfMissing("accounts", "quota_remaining", "INTEGER NOT NULL DEFAULT 4");
     this.addColumnIfMissing("accounts", "quota_used_today", "INTEGER NOT NULL DEFAULT 0");
     this.addColumnIfMissing("accounts", "mini_daily_limit", "INTEGER NOT NULL DEFAULT 5");
     this.addColumnIfMissing("accounts", "mini_remaining", "INTEGER NOT NULL DEFAULT 5");
@@ -649,16 +655,14 @@ export class AppDatabase {
       UPDATE accounts
       SET
         name = CASE WHEN name = '' THEN '账号 ' || printf('%03d', id) ELSE name END,
-        remark = CASE WHEN remark = '' AND name NOT LIKE '账号 %' THEN name ELSE remark END,
-        daily_quota_limit = CASE WHEN daily_quota_limit = 10 AND (mini_daily_limit + fast_daily_limit) != 8 THEN mini_daily_limit + fast_daily_limit ELSE daily_quota_limit END,
-        quota_remaining = CASE WHEN quota_remaining = 10 AND (mini_remaining + fast_remaining) != 8 THEN mini_remaining + fast_remaining ELSE quota_remaining END,
-        quota_used_today = CASE WHEN quota_used_today = 0 AND (mini_used_today + fast_used_today) > 0 THEN mini_used_today + fast_used_today ELSE quota_used_today END
+        remark = CASE WHEN remark = '' AND name NOT LIKE '账号 %' THEN name ELSE remark END
     `).run();
   }
 
   private ensureApiRequestColumns() {
     this.addColumnIfMissing("api_requests", "source", "TEXT NOT NULL DEFAULT 'local'");
     this.addColumnIfMissing("api_requests", "reference_image_path", "TEXT");
+    this.addColumnIfMissing("api_requests", "reference_image_paths", "TEXT");
     this.addColumnIfMissing("api_requests", "remove_watermark", "INTEGER NOT NULL DEFAULT 1");
     this.addColumnIfMissing("api_requests", "callback_url", "TEXT");
     this.addColumnIfMissing("api_requests", "dola_thread_url", "TEXT");
@@ -736,9 +740,18 @@ function isSettingsKey(key: string): key is keyof AppSettings {
 }
 
 function normalizeApiRequest(row: unknown): ApiRequest {
-  const request = row as ApiRequest & { removeWatermark: number | boolean };
+  const request = row as ApiRequest & { removeWatermark: number | boolean; referenceImagePathsJson?: string | null };
+  let referenceImagePaths: string[] = [];
+  try {
+    const parsed = JSON.parse(request.referenceImagePathsJson || "[]");
+    if (Array.isArray(parsed)) referenceImagePaths = parsed.filter((item): item is string => typeof item === "string");
+  } catch {
+    referenceImagePaths = [];
+  }
+  if (!referenceImagePaths.length && request.referenceImagePath) referenceImagePaths = [request.referenceImagePath];
   return {
     ...request,
+    referenceImagePaths,
     removeWatermark: Boolean(request.removeWatermark)
   };
 }

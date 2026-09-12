@@ -24,7 +24,8 @@ import type { Account, ApiRequest, ApiRequestStatus, AppSettings, DolaModel } fr
 import {
   resolveCleanVideoUrl,
   verifyDolaShareVideoResource,
-  verifyPlayableVideoUrl
+  verifyPlayableVideoUrl,
+  withMp4ExtensionHint
 } from "./watermark.js";
 
 type DataChangedCallback = () => void;
@@ -263,13 +264,13 @@ export class DolaExecutor {
           : "已确认视频生成模式和 Seedance 2.0"
       );
 
-      if (request.referenceImagePath) {
+      if (request.referenceImagePaths.length) {
         await this.updateProgress({
           requestId,
           status: "running",
-          message: "正在上传参考图"
+          message: `正在批量上传 ${request.referenceImagePaths.length} 张参考图`
         });
-        await uploadReferenceImage(win, request.referenceImagePath);
+        await uploadReferenceImages(win, request.referenceImagePaths);
       }
 
       await this.updateProgress({
@@ -330,8 +331,8 @@ export class DolaExecutor {
           status: "running",
           message: "Dola 媒体扩展已提取无水印视频，正在验证 MP4"
         });
-        await verifyPlayableVideoUrl(generationResult.cleanVideoUrl);
-        cleanVideoUrl = generationResult.cleanVideoUrl;
+        cleanVideoUrl = withMp4ExtensionHint(generationResult.cleanVideoUrl);
+        await verifyPlayableVideoUrl(cleanVideoUrl);
         resolutionLabel = "Dola 媒体扩展";
         this.recordOperation(
           requestId,
@@ -569,14 +570,16 @@ async function looksLoggedOut(win: BrowserWindow) {
   `);
 }
 
-async function uploadReferenceImage(win: BrowserWindow, imagePath: string) {
-  const resolvedPath = path.resolve(imagePath);
-  const stat = await fs.stat(resolvedPath).catch(() => null);
-  if (!stat?.isFile()) {
-    throw new Error(`参考图不存在：${resolvedPath}`);
+async function uploadReferenceImages(win: BrowserWindow, imagePaths: string[]) {
+  if (!imagePaths.length) return;
+  if (imagePaths.length > 10) throw new Error("参考图最多只能选择 10 张");
+  const resolvedPaths = imagePaths.map((imagePath) => path.resolve(imagePath));
+  for (const [index, resolvedPath] of resolvedPaths.entries()) {
+    const stat = await fs.stat(resolvedPath).catch(() => null);
+    if (!stat?.isFile()) throw new Error(`第 ${index + 1} 张参考图不存在：${resolvedPath}`);
   }
 
-  if (await setFirstFileInput(win, resolvedPath)) {
+  if (await setFirstFileInput(win, resolvedPaths)) {
     await wait(2500);
     return;
   }
@@ -584,7 +587,7 @@ async function uploadReferenceImage(win: BrowserWindow, imagePath: string) {
   await clickByKeywords(win, ["上传", "参考图", "图片", "添加图片", "附件", "image", "upload"]);
   await wait(1200);
 
-  if (await setFirstFileInput(win, resolvedPath)) {
+  if (await setFirstFileInput(win, resolvedPaths)) {
     await wait(2500);
     return;
   }
@@ -592,7 +595,7 @@ async function uploadReferenceImage(win: BrowserWindow, imagePath: string) {
   throw new Error("没有找到Dola页面的图片上传控件");
 }
 
-async function setFirstFileInput(win: BrowserWindow, filePath: string) {
+async function setFirstFileInput(win: BrowserWindow, filePaths: string[]) {
   const debug = win.webContents.debugger;
   let attachedHere = false;
   try {
@@ -611,7 +614,7 @@ async function setFirstFileInput(win: BrowserWindow, filePath: string) {
     if (!inputs.nodeIds.length) return false;
     await debug.sendCommand("DOM.setFileInputFiles", {
       nodeId: inputs.nodeIds[0],
-      files: [filePath]
+      files: filePaths
     });
     return true;
   } finally {
@@ -2144,7 +2147,7 @@ async function downloadCleanVideoIfNeeded(settings: AppSettings, requestId: stri
   }
 
   const contentType = (response.headers.get("content-type") || "").toLowerCase();
-  if (!contentType.startsWith("video/") && !contentType.includes("application/octet-stream")) {
+  if (!contentType.startsWith("video/") && !contentType.includes("octet-stream")) {
     throw new Error(`下载结果不是视频文件：Content-Type ${contentType || "unknown"}`);
   }
 

@@ -8,7 +8,7 @@ Dola账号池是一款基于 Electron 的本地桌面工具，用于管理多个
 
 - 多账号隔离：每个账号使用固定的 Electron `persist:` partition，Cookie、LocalStorage、缓存和登录状态互不混用。
 - 登录持久化：关闭软件后保留各账号登录状态，下次启动可继续使用。
-- 共享额度管理：默认每个账号每日 10 点额度，Mini 消耗 2 点，Fast 消耗 3 点，均可在配置页调整。
+- 持久额度管理：每个账号默认 4 点，固定使用 Seedance 2.5，每次生成消耗 2 点；剩余和已用额度写入 SQLite，重启后继续保留。
 - 账号池调度：自动选择已登录、空闲且额度充足的账号执行请求。
 - 后台视频生成：支持文本提示词和参考图片，跟踪等待、执行、成功和失败状态。
 - 30 秒模式：Seedance 2.5 请求在发送前强制校验“视频生成、2.5、30s、扩展开启”，校验失败时不会提交。
@@ -16,7 +16,7 @@ Dola账号池是一款基于 Electron 的本地桌面工具，用于管理多个
 - 严格结果输出：只有取得经过验证的真实 MP4 地址或本地 MP4 文件后，任务才会返回 `success`。
 - 可选去水印：可配置第三方解析接口；只在取得并验证 MP4 后返回 `success`，解析失败或未取得 MP4 时返回 `failed`。
 - 本地接口服务：默认监听 `127.0.0.1:17888`，支持 API Key、状态查询和回调地址。
-- 可观测界面：提供账号概览、剩余额度、Seedance 2.0/2.5 预计产能、搜索筛选和接口日志详情。
+- 可观测界面：提供账号概览、剩余额度、Seedance 2.5 预计产能、搜索筛选和接口日志详情。
 - 行动日志：逐步记录账号、任务、分享地址、去水印和错误信息，默认保留 3 天并自动清理。
 - 结果恢复与诊断：支持从账号最近对话恢复已生成视频，日志显示分享复制、去水印重试和耗时信息。
 - 跨平台安装包：提供 macOS Apple Silicon DMG 和 Windows x64 EXE。
@@ -45,9 +45,10 @@ macOS 应用已进行完整 ad-hoc 签名，避免因 Electron 临时签名不�
 ```bash
 curl -X POST http://127.0.0.1:17888/api/generate \
   -H "Authorization: Bearer local-dola-key" \
-  -F "model=seedance_2_0" \
-  -F "prompt=生成一段 10 秒科普视频" \
-  -F "referenceImage=@/path/to/reference.png" \
+  -F "model=seedance_2_5" \
+  -F "prompt=生成一段 30 秒科普视频" \
+  -F "referenceImage=@/path/to/reference-1.png" \
+  -F "referenceImage=@/path/to/reference-2.png" \
   -F "callbackUrl=http://127.0.0.1:3000/dola/callback"
 ```
 
@@ -65,7 +66,7 @@ curl http://127.0.0.1:17888/api/requests/dola-xxxxxxxxxxxxxxxx \
   "requestId": "dola-xxxxxxxxxxxxxxxx",
   "status": "success",
   "message": "视频生成完成，去水印 MP4 地址已验证（耗时 X 秒，第 N 次解析）",
-  "model": "seedance_2_0",
+  "model": "seedance_2_5",
   "cleanVideoUrl": "https://example.com/video.mp4",
   "outputVideoPath": null
 }

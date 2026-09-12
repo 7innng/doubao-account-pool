@@ -7,7 +7,9 @@ import {
   hasDolaShareVideoResource,
   isMp4VideoUrl,
   isRetryableWatermarkError,
+  verifyPlayableVideoUrl,
   WATERMARK_RETRY_DELAYS_MS,
+  withMp4ExtensionHint,
 } from '../dist-electron/watermark.js'
 
 test('requires a real video resource in a copied Dola share page', () => {
@@ -26,9 +28,35 @@ test('extracts a nested MP4 result', () => {
   assert.equal(extractVideoUrlFromPayload({ data: { playUrl: url } }), url)
 })
 
+test('extracts an extensionless download URL and adds an MP4 hint', () => {
+  const url = 'https://cdn.example.com/download?id=video&token=test'
+  assert.equal(extractVideoUrlFromPayload({ data: { download_url: url } }), `${url}#video.mp4`)
+})
+
 test('accepts common MP4 URL formats', () => {
   assert.equal(isMp4VideoUrl('https://cdn.example.com/video?id=1&format=mp4'), true)
   assert.equal(isMp4VideoUrl('https://example.com/share/page'), false)
+})
+
+test('adds an MP4 hint without changing the signed HTTP request path', () => {
+  const source = 'https://cdn.example.com/download?id=1&token=signed'
+  const hinted = withMp4ExtensionHint(source)
+  assert.equal(hinted, `${source}#video.mp4`)
+  assert.equal(new URL(hinted).pathname, '/download')
+  assert.equal(new URL(hinted).search, '?id=1&token=signed')
+})
+
+test('accepts HTTP 206 binary octet-stream video responses', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async () => new Response(new Uint8Array([0, 0, 0, 24]), {
+    status: 206,
+    headers: { 'Content-Type': 'binary/octet-stream' },
+  })
+  try {
+    await assert.doesNotReject(() => verifyPlayableVideoUrl('https://cdn.example.com/download#video.mp4'))
+  } finally {
+    globalThis.fetch = originalFetch
+  }
 })
 
 test('retries eventual-consistency failures from the watermark provider', () => {

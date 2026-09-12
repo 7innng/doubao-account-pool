@@ -16,7 +16,7 @@
 6. 提交后保存返回的 `requestId`，每 3 到 5 秒查询 `/api/requests/{requestId}`。
 7. 只有状态变成 `success` 后，才把 `cleanVideoUrl` 或 `outputVideoPath` 交给画布的视频节点。
 
-先用一条无参考图的 Mini 测试任务跑通，再添加参考图和多账号并发。
+先用一条无参考图的 Seedance 2.5 测试任务跑通，再添加参考图和多账号并发。
 
 ## 1. 先理解它是做什么的
 
@@ -72,13 +72,12 @@ Dola账号池不是视频模型，也不是另一个Dola客户端。它承担四
 
 | 项目 | 默认值 |
 | --- | ---: |
-| 每日总额度 | 10 |
-| Mini 单次消耗 | 2 |
-| Fast 单次消耗 | 3 |
+| 每日总额度 | 4 |
+| Seedance 2.5 单次消耗 | 2 |
 
-因此一个满额账号最多可生成 5 次 Mini，或 3 次 Fast（剩余 1 点）。Mini 和 Fast 显示的是两种“全部用于该模型”的预计产能，不能相加。
+因此一个满额账号默认可生成 2 次 Seedance 2.5。额度会写入本地 SQLite：关闭并重新启动软件后，剩余和已用额度继续保留，只有手动重置时才恢复。程序不再向新接口请求提供其他模型选项。
 
-注意：界面额度是本地调度账本，不是Dola官方实时余额。如果用户在Dola网页中手动生成了视频，本地额度不会自动知道，需要在账号设置中校正或重置。
+注意：界面额度是持久化的本地调度账本，不是Dola官方实时余额，也不会绕过Dola服务端自身的次数或频率限制。
 
 ## 5. 推荐配置
 
@@ -159,18 +158,13 @@ curl -X POST http://127.0.0.1:17888/api/generate \
   -H "Authorization: Bearer local-dola-key" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "seedance_2_0",
-    "prompt": "生成一段10秒、16:9横屏的女性科普动画，不要字幕，不要水印。",
+    "model": "seedance_2_5",
+    "prompt": "生成一段30秒、16:9横屏的女性科普动画，不要字幕，不要水印。",
     "source": "infinite-canvas"
   }'
 ```
 
-模型只能使用：
-
-- `seedance_2_0`
-- `seedance_2_5`
-
-当前接口没有独立的画面比例字段，请把“16:9 横屏”等要求写入提示词。`seedance_2_5` 会由内置扩展固定为 30 秒，并在提交前校验页面确实显示 30s；`seedance_2_0` 的时长仍以Dola页面和提示词的实际结果为准。
+模型固定为 `seedance_2_5`，不传 `model` 时也会自动选择它。当前接口没有独立的画面比例字段，请把“16:9 横屏”等要求写入提示词。内置扩展会固定为 30 秒，并在提交前校验页面确实显示 30s。
 
 ## 9. 提交参考图
 
@@ -179,16 +173,19 @@ curl -X POST http://127.0.0.1:17888/api/generate \
 ```bash
 curl -X POST http://127.0.0.1:17888/api/generate \
   -H "Authorization: Bearer local-dola-key" \
-  -F "model=seedance_2_0" \
-  -F "prompt=参考图中的人物和产品，生成10秒、16:9横屏动画。" \
-  -F "referenceImage=@/Users/你的名字/Pictures/reference.png" \
+  -F "model=seedance_2_5" \
+  -F "prompt=参考图中的人物和产品，生成30秒、16:9横屏动画。" \
+  -F "referenceImage=@/Users/你的名字/Pictures/reference-1.png" \
+  -F "referenceImage=@/Users/你的名字/Pictures/reference-2.png" \
   -F "source=infinite-canvas"
 ```
 
-也可以使用：
+一次请求最多上传 10 张参考图。软件内“API 调试”页可直接使用系统文件选择器批量选择；超过上限会在提交前报错。也可以使用：
 
 - `referenceImagePath`：账号池所在电脑能够访问的绝对路径。
 - `referenceImageUrl`：账号池能够直接下载的图片 URL。
+- `referenceImagePaths`：JSON 格式的本地绝对路径数组。
+- `referenceImageUrls`：JSON 格式的图片 URL 数组。
 
 画布在云端时不能把云端自己的本地路径传给 Mac；应上传文件本身，或提供 Mac 可以访问的 URL。
 
@@ -302,7 +299,7 @@ curl -X POST \
 
 ### 返回 409，没有可用账号或额度不足
 
-检查是否有账号已登录、空闲，并且共享额度足够。Mini 至少需要 2 点，Fast 至少需要 3 点。
+检查是否有账号已登录、空闲，并且共享额度至少还有 2 点。
 
 ### 一直显示 accepted
 

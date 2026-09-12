@@ -481,6 +481,41 @@ textarea:focus {
   line-height: 1.55;
 }
 
+.api-test-file-picker {
+  grid-column: 1 / -1;
+}
+
+.api-test-selected-images {
+  grid-column: 1 / -1;
+  min-width: 0;
+  border: 1px solid #c7d7fe;
+  border-radius: 8px;
+  background: #eff6ff;
+  padding: 10px 12px;
+}
+
+.api-test-selected-images > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.api-test-selected-images ol {
+  display: grid;
+  gap: 4px;
+  margin: 8px 0 0;
+  padding-left: 22px;
+  color: #475467;
+  font-size: 12px;
+}
+
+.api-test-selected-images li {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .duration-guard-note {
   margin: -2px 0 0;
   border: 1px solid #c7d7fe;
@@ -648,7 +683,7 @@ pre {
 
 .account-overview {
   display: grid;
-  grid-template-columns: repeat(4, minmax(90px, 1fr)) minmax(150px, 1.35fr) repeat(2, minmax(100px, 1fr));
+  grid-template-columns: repeat(4, minmax(90px, 1fr)) minmax(150px, 1.35fr) minmax(100px, 1fr);
   margin-bottom: 14px;
   border: 1px solid #e1e5eb;
   border-radius: 8px;
