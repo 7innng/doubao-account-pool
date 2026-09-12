@@ -1,26 +1,31 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { BrowserWindow, clipboard } from "electron";
+import { BrowserWindow, clipboard, session } from "electron";
 import type { AppDatabase } from "./database.js";
 import { AccountTaskScheduler } from "./account-scheduler.js";
+import { ensureDolaExtension } from "./extension-loader.js";
 import {
-  extractDoubaoConversationUrl,
-  extractDoubaoFailureMessage,
-  extractDoubaoShareUrl,
-  getNewDoubaoVideoUrls,
+  extractDolaConversationUrl,
+  extractDolaFailureMessage,
+  extractDolaShareUrl,
+  getNewDolaVideoUrls,
   hasNewGenerationCompletion,
   hasNewPromptOccurrence,
   hasNewTextOccurrence,
-  isDoubaoDesktopDownloadPrompt,
-  isDoubaoGenerationComplete,
-  isDoubaoPromptRewritePage,
+  isDolaDesktopDownloadPrompt,
+  isDolaGenerationComplete,
+  isDolaPromptRewritePage,
   isGenerationReadyForShare,
   isQuotaNotChargedFailure,
   normalizeComparableText
-} from "./doubao-page-state.js";
+} from "./dola-page-state.js";
 import { toPublicApiRequest } from "./public-api.js";
-import type { Account, ApiRequest, ApiRequestStatus, AppSettings, DoubaoModel } from "./types.js";
-import { resolveCleanVideoUrl, verifyDoubaoShareVideoResource } from "./watermark.js";
+import type { Account, ApiRequest, ApiRequestStatus, AppSettings, DolaModel } from "./types.js";
+import {
+  resolveCleanVideoUrl,
+  verifyDolaShareVideoResource,
+  verifyPlayableVideoUrl
+} from "./watermark.js";
 
 type DataChangedCallback = () => void;
 type QueueItem = {
@@ -43,10 +48,10 @@ type ShareCopyResult = {
   reason: string | null;
 };
 
-class DoubaoPageFailureError extends Error {
+class DolaPageFailureError extends Error {
   constructor(message: string, readonly refundQuota: boolean) {
     super(message);
-    this.name = "DoubaoPageFailureError";
+    this.name = "DolaPageFailureError";
   }
 }
 
@@ -78,7 +83,7 @@ const CALLBACK_TIMEOUT_MS = 5000;
 const VIDEO_CARD_WAIT_MS = 15000;
 const callbackQueues = new Map<string, Promise<void>>();
 
-export class DoubaoExecutor {
+export class DolaExecutor {
   private readonly scheduler: AccountTaskScheduler<QueueItem>;
 
   constructor(
@@ -94,7 +99,7 @@ export class DoubaoExecutor {
           await this.execute(item.requestId);
         }
       },
-      (error) => console.error("豆包并行执行器异常", error)
+      (error) => console.error("Dola并行执行器异常", error)
     );
   }
 
@@ -131,34 +136,34 @@ export class DoubaoExecutor {
       await this.updateProgress({
         requestId,
         status: "running",
-        message: "正在定位豆包已生成视频并重试复制分享链接"
+        message: "正在定位Dola已生成视频并重试复制分享链接"
       });
       this.database.updateAccount({ id: account.id, currentStatus: "busy" });
 
-      win = this.createExecutionWindow(account, settings);
-      await loadUrl(win, settings.doubaoChatUrl || "https://www.doubao.com/chat");
+      win = await this.createExecutionWindow(account, settings);
+      await loadUrl(win, settings.dolaChatUrl || "https://www.dola.com/chat");
       await wait(2500);
-      await dismissDoubaoDesktopDownloadPrompt(win);
+      await dismissDolaDesktopDownloadPrompt(win);
 
       if (await looksLoggedOut(win)) {
-        throw new Error("豆包账号未登录，无法恢复视频结果");
+        throw new Error("Dola账号未登录，无法恢复视频结果");
       }
 
       const recovery = await findGeneratedConversationAndCopyShare(
         win,
         request.prompt,
-        request.doubaoThreadUrl
+        request.dolaThreadUrl
       );
       if (!recovery.shareUrl) {
         throw new Error(
-          `未找到可恢复的豆包视频：历史链接 ${recovery.candidateCount} 条，提示词匹配 ${recovery.promptMatchCount} 条，确认已生成 ${recovery.generatedMatchCount} 条，仍未复制到分享链接${recovery.shareFailureReason ? `（${recovery.shareFailureReason}）` : ""}`
+          `未找到可恢复的Dola视频：历史链接 ${recovery.candidateCount} 条，提示词匹配 ${recovery.promptMatchCount} 条，确认已生成 ${recovery.generatedMatchCount} 条，仍未复制到分享链接${recovery.shareFailureReason ? `（${recovery.shareFailureReason}）` : ""}`
         );
       }
       this.recordOperation(
         requestId,
         "复制分享地址",
         "success",
-        "已复制并确认豆包分享页包含视频资源",
+        "已复制并确认Dola分享页包含视频资源",
         recovery.shareUrl
       );
       const resolvedVideo = await this.resolveCleanVideoForVerifiedShare(
@@ -176,7 +181,7 @@ export class DoubaoExecutor {
         message: outputVideoPath
           ? `已恢复结果，去水印 MP4 已验证并保存到本地（${formatWatermarkResolution(cleanVideo)}）`
           : `已恢复结果，去水印 MP4 地址已验证（${formatWatermarkResolution(cleanVideo)}）`,
-        doubaoThreadUrl: shareUrl,
+        dolaThreadUrl: shareUrl,
         rawVideoUrl: null,
         cleanVideoUrl,
         outputVideoPath
@@ -212,21 +217,21 @@ export class DoubaoExecutor {
 
     const settings = this.database.getSettings();
     let win: BrowserWindow | null = null;
-    let submittedToDoubao = false;
+    let submittedToDola = false;
     let keepWindowOpen = false;
 
     try {
       await this.updateProgress({
         requestId,
         status: "running",
-        message: "正在打开豆包执行窗口"
+        message: "正在打开Dola执行窗口"
       });
       this.database.updateAccount({ id: account.id, currentStatus: "busy" });
 
-      win = this.createExecutionWindow(account, settings);
-      await loadUrl(win, settings.doubaoChatUrl || "https://www.doubao.com/chat");
+      win = await this.createExecutionWindow(account, settings);
+      await loadUrl(win, settings.dolaChatUrl || "https://www.dola.com/chat");
       await wait(2500);
-      await dismissDoubaoDesktopDownloadPrompt(win);
+      await dismissDolaDesktopDownloadPrompt(win);
 
       if (await looksLoggedOut(win)) {
         this.database.updateAccount({
@@ -238,15 +243,25 @@ export class DoubaoExecutor {
         if (!win.isVisible()) {
           win.show();
         }
-        throw new Error("豆包账号未登录，已打开登录窗口，请登录后重试");
+        throw new Error("Dola账号未登录，已打开登录窗口，请登录后重试");
       }
 
       await this.updateProgress({
         requestId,
         status: "running",
-        message: "正在切换豆包视频生成模式"
+        message: request.model === "seedance_2_5"
+          ? "正在切换 Seedance 2.5，并校验插件 30 秒模式"
+          : "正在切换 Seedance 2.0 视频生成模式"
       });
       await activateVideoMode(win, request.model);
+      this.recordOperation(
+        requestId,
+        "提交参数校验",
+        "success",
+        request.model === "seedance_2_5"
+          ? "已确认视频生成模式、Seedance 2.5、30s 和扩展开启"
+          : "已确认视频生成模式和 Seedance 2.0"
+      );
 
       if (request.referenceImagePath) {
         await this.updateProgress({
@@ -267,25 +282,25 @@ export class DoubaoExecutor {
       await this.updateProgress({
         requestId,
         status: "running",
-        message: "正在提交豆包生成"
+        message: "正在提交Dola生成"
       });
       const generationBaseline = await inspectGenerationPage(win);
       await submitPromptAndWait(win, request.model, request.prompt);
-      submittedToDoubao = true;
+      submittedToDola = true;
       const submittedConversationUrl = await waitForSubmittedConversationUrl(win);
       if (submittedConversationUrl) {
         await this.updateProgress({
           requestId,
           status: "running",
-          message: "已记录本次豆包会话地址，等待视频完成",
-          doubaoThreadUrl: submittedConversationUrl
+          message: "已记录本次Dola会话地址，等待视频完成",
+          dolaThreadUrl: submittedConversationUrl
         });
       }
 
       await this.updateProgress({
         requestId,
         status: "running",
-        message: "已提交豆包，等待视频完成并复制分享链接"
+        message: "已提交Dola，等待视频完成并复制分享链接"
       });
 
       const generationResult = await waitForGenerationResult(
@@ -302,41 +317,60 @@ export class DoubaoExecutor {
         }
       );
 
-      if (!generationResult.shareUrl) {
-        throw new Error(
-          `视频已生成，但未提取到豆包分享链接，无法获取去水印视频${generationResult.shareFailureReason ? `（${generationResult.shareFailureReason}）` : ""}`
-        );
-      }
-
-      this.recordOperation(
-        requestId,
-        "复制分享地址",
-        "success",
-        "已复制并确认豆包分享页包含视频资源",
-        generationResult.shareUrl
-      );
-
       if (!request.removeWatermark) {
         throw new Error("接口仅返回去水印视频，本次请求未启用去水印");
       }
 
-      const resolvedVideo = await this.resolveCleanVideoForVerifiedShare(
-        requestId,
-        settings,
-        generationResult.shareUrl
-      );
-      const doubaoThreadUrl = resolvedVideo.shareUrl;
-      const cleanVideo = resolvedVideo.cleanVideo;
-      const cleanVideoUrl = cleanVideo.url;
+      let dolaThreadUrl = generationResult.shareUrl;
+      let cleanVideoUrl: string;
+      let resolutionLabel: string;
+      if (generationResult.cleanVideoUrl) {
+        await this.updateProgress({
+          requestId,
+          status: "running",
+          message: "Dola 媒体扩展已提取无水印视频，正在验证 MP4"
+        });
+        await verifyPlayableVideoUrl(generationResult.cleanVideoUrl);
+        cleanVideoUrl = generationResult.cleanVideoUrl;
+        resolutionLabel = "Dola 媒体扩展";
+        this.recordOperation(
+          requestId,
+          "扩展提取视频",
+          "success",
+          "Dola 媒体扩展已提取并验证可播放视频",
+          cleanVideoUrl
+        );
+      } else {
+        if (!generationResult.shareUrl) {
+          throw new Error(
+            `视频已生成，但扩展未捕获无水印视频，也未提取到 Dola 分享链接${generationResult.shareFailureReason ? `（${generationResult.shareFailureReason}）` : ""}`
+          );
+        }
+        this.recordOperation(
+          requestId,
+          "复制分享地址",
+          "success",
+          "已复制并确认 Dola 分享页包含视频资源",
+          generationResult.shareUrl
+        );
+        const resolvedVideo = await this.resolveCleanVideoForVerifiedShare(
+          requestId,
+          settings,
+          generationResult.shareUrl
+        );
+        dolaThreadUrl = resolvedVideo.shareUrl;
+        cleanVideoUrl = resolvedVideo.cleanVideo.url;
+        resolutionLabel = formatWatermarkResolution(resolvedVideo.cleanVideo);
+      }
       const outputVideoPath = await downloadCleanVideoIfNeeded(settings, requestId, cleanVideoUrl);
 
       await this.updateProgress({
         requestId,
         status: "success",
         message: outputVideoPath
-          ? `视频生成完成，去水印 MP4 已验证并保存到本地（${formatWatermarkResolution(cleanVideo)}）`
-          : `视频生成完成，去水印 MP4 地址已验证（${formatWatermarkResolution(cleanVideo)}）`,
-        doubaoThreadUrl,
+          ? `视频生成完成，无水印 MP4 已验证并保存到本地（${resolutionLabel}）`
+          : `视频生成完成，无水印 MP4 地址已验证（${resolutionLabel}）`,
+        dolaThreadUrl,
         rawVideoUrl: null,
         cleanVideoUrl,
         outputVideoPath
@@ -347,11 +381,20 @@ export class DoubaoExecutor {
         win.close();
       }
     } catch (error) {
-      const shouldRefundQuota = !submittedToDoubao || isRefundableExecutionError(error);
+      const shouldRefundQuota = !submittedToDola || isRefundableExecutionError(error);
       if (shouldRefundQuota) {
         this.database.refundQuota(account.id, request.model);
       }
-      await this.failRequest(request, errorMessage(error), shouldRefundQuota);
+      if (isDestroyedWindowError(error)) {
+        const suffix = shouldRefundQuota ? "，已退回预扣额度" : "；Dola端已提交的生成无法撤回";
+        await this.updateProgress({
+          requestId,
+          status: "stopped",
+          message: `Dola执行窗口已关闭，任务停止${suffix}`
+        });
+      } else {
+        await this.failRequest(request, errorMessage(error), shouldRefundQuota);
+      }
       this.database.updateAccount({
         id: account.id,
         currentStatus: keepWindowOpen ? "login_required" : "idle"
@@ -371,7 +414,7 @@ export class DoubaoExecutor {
       action: operationAction(input.message || "", input.status),
       status: input.status === "failed" ? "failed" : input.status === "success" ? "success" : "info",
       message: input.message || "",
-      targetUrl: input.doubaoThreadUrl || input.rawVideoUrl || input.cleanVideoUrl || null
+      targetUrl: input.dolaThreadUrl || input.rawVideoUrl || input.cleanVideoUrl || null
     });
     this.onDataChanged();
     postCallback(updated);
@@ -463,13 +506,15 @@ export class DoubaoExecutor {
     });
   }
 
-  private createExecutionWindow(account: Account, settings: AppSettings) {
+  private async createExecutionWindow(account: Account, settings: AppSettings) {
+    const accountSession = session.fromPartition(account.partition);
+    await ensureDolaExtension(accountSession, account.partition);
     const titleName = account.remark || account.name;
     return new BrowserWindow({
       width: 1320,
       height: 860,
       show: settings.showExecutorWindow,
-      title: `豆包执行器 - ${titleName}`,
+      title: `Dola执行器 - ${titleName}`,
       webPreferences: {
         partition: account.partition,
         contextIsolation: true,
@@ -500,12 +545,12 @@ async function loadUrl(win: BrowserWindow, url: string, timeoutMs = 30000) {
       finish(resolve);
     };
     const onFail = (_event: Electron.Event, _code: number, description: string) => {
-      finish(() => reject(new Error(`豆包页面加载失败：${description}`)));
+      finish(() => reject(new Error(`Dola页面加载失败：${description}`)));
     };
     win.webContents.once("did-finish-load", onFinish);
     win.webContents.once("did-fail-load", onFail);
     timer = setTimeout(() => {
-      finish(() => reject(new Error(`豆包页面加载超时（${Math.ceil(timeoutMs / 1000)} 秒）`)));
+      finish(() => reject(new Error(`Dola页面加载超时（${Math.ceil(timeoutMs / 1000)} 秒）`)));
       if (!win.isDestroyed()) win.webContents.stop();
     }, timeoutMs);
     void win.loadURL(url).catch((error) => {
@@ -544,7 +589,7 @@ async function uploadReferenceImage(win: BrowserWindow, imagePath: string) {
     return;
   }
 
-  throw new Error("没有找到豆包页面的图片上传控件");
+  throw new Error("没有找到Dola页面的图片上传控件");
 }
 
 async function setFirstFileInput(win: BrowserWindow, filePath: string) {
@@ -580,7 +625,7 @@ async function fillPrompt(win: BrowserWindow, prompt: string) {
   const target = await findComposerTarget(win);
 
   if (!target) {
-    throw new Error("没有找到豆包提示词输入框");
+    throw new Error("没有找到Dola提示词输入框");
   }
 
   const attempts: Array<{ label: string; run: () => Promise<void> }> = [
@@ -626,7 +671,7 @@ async function fillPrompt(win: BrowserWindow, prompt: string) {
   }
 
   const diagnostics = await inspectComposer(win, prompt);
-  throw new Error(`豆包输入框没有真正接收本次提示词（已尝试 ${tried.join("、")}；${formatComposerDiagnostics(diagnostics)}）`);
+  throw new Error(`Dola输入框没有真正接收本次提示词（已尝试 ${tried.join("、")}；${formatComposerDiagnostics(diagnostics)}）`);
 }
 
 async function findComposerTarget(win: BrowserWindow) {
@@ -707,17 +752,103 @@ async function setComposerTextDirectly(win: BrowserWindow, prompt: string) {
   `);
 }
 
-async function activateVideoMode(win: BrowserWindow, model: DoubaoModel) {
-  const target = model === "seedance_2_0_mini" ? "Mini" : "Fast";
+async function activateVideoMode(win: BrowserWindow, model: DolaModel) {
+  const target = model === "seedance_2_0" ? "2.0" : "2.5";
   await clickByKeywords(win, ["视频生成"]);
   await wait(800);
   await clickByKeywords(win, ["Seedance", "模型", "model"]);
   await wait(500);
-  await clickByKeywords(win, [target, model === "seedance_2_0_mini" ? "mini" : "fast"]);
-  await wait(500);
+  await clickByKeywords(win, [`Seedance ${target}`, `Seedance${target}`, target]);
+  await wait(900);
+
+  await setExtensionDuration30(win, model === "seedance_2_5");
+  await wait(1200);
+
+  const state = await inspectDolaVideoControls(win);
+  if (!state.videoMode) {
+    throw new Error("提交前校验失败：Dola 当前不是视频生成模式");
+  }
+  if (model === "seedance_2_5" && !state.model25) {
+    throw new Error(`提交前校验失败：未切换到 Seedance 2.5（当前：${state.modelText || "未识别"}）`);
+  }
+  if (model === "seedance_2_0" && !state.model20) {
+    throw new Error(`提交前校验失败：未切换到 Seedance 2.0（当前：${state.modelText || "未识别"}）`);
+  }
+  if (model === "seedance_2_5" && (!state.duration30 || !state.extensionEnabled)) {
+    throw new Error(
+      `提交前校验失败：Seedance 2.5 必须同时显示 30s 且开启扩展（时长：${state.durationText || "未识别"}，扩展：${state.extensionEnabled ? "开启" : "关闭"}）`
+    );
+  }
 }
 
-async function submitPromptAndWait(win: BrowserWindow, model: DoubaoModel, prompt: string) {
+interface DolaVideoControlState {
+  videoMode: boolean;
+  model20: boolean;
+  model25: boolean;
+  duration30: boolean;
+  extensionEnabled: boolean;
+  modelText: string;
+  durationText: string;
+}
+
+async function setExtensionDuration30(win: BrowserWindow, enabled: boolean) {
+  return runPageScript<boolean>(win, `
+    (() => {
+      const enabled = ${JSON.stringify(enabled)};
+      try {
+        localStorage.setItem("intl_dola_enable_30s_v1", enabled ? "1" : "0");
+        document.documentElement.setAttribute("data-watermark-free-duration-30", enabled ? "1" : "0");
+        document.dispatchEvent(new Event("watermark-free-duration-30-change"));
+        return true;
+      } catch {
+        return false;
+      }
+    })()
+  `);
+}
+
+async function inspectDolaVideoControls(win: BrowserWindow) {
+  return runPageScript<DolaVideoControlState>(win, `
+    (() => {
+      const visible = (element) => {
+        if (!element) return false;
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        return rect.width > 2 && rect.height > 2 && style.visibility !== "hidden" && style.display !== "none";
+      };
+      const textOf = (element) => String([
+        element?.innerText,
+        element?.textContent,
+        element?.getAttribute?.("aria-label"),
+        element?.getAttribute?.("title")
+      ].filter(Boolean).join(" ")).replace(/\\s+/g, " ").trim();
+      const controls = Array.from(document.querySelectorAll(
+        'button, [role="button"], [data-input-engine-actionbar-control-key], [aria-haspopup]'
+      )).filter(visible);
+      const modelControl = document.querySelector(
+        '[data-input-engine-actionbar-control-key="video-model"], [data-input-engine-actionbar-control-key="model"]'
+      ) || controls.find((element) => /Seedance|模型/i.test(textOf(element)));
+      const durationControl = controls.find((element) => /^(5|10|15|30)s$/i.test(textOf(element).replace(/\\s+/g, "")))
+        || controls.find((element) => /(?:^|\\s)(5|10|15|30)s(?:$|\\s)/i.test(textOf(element)));
+      const pageText = String(document.body?.innerText || "").replace(/\\s+/g, " ");
+      const modelText = textOf(modelControl);
+      const durationText = textOf(durationControl);
+      const extensionEnabled = localStorage.getItem("intl_dola_enable_30s_v1") === "1"
+        && document.documentElement.getAttribute("data-watermark-free-duration-30") === "1";
+      return {
+        videoMode: /描述你想要的视频|视频生成/.test(pageText),
+        model20: /2\\.0|seedance[^\\d]*fast/i.test(modelText),
+        model25: /2\\.5/.test(modelText),
+        duration30: /(?:^|\\s)30s(?:$|\\s)/i.test(durationText) || /^30s$/i.test(durationText.replace(/\\s+/g, "")),
+        extensionEnabled,
+        modelText,
+        durationText
+      };
+    })()
+  `);
+}
+
+async function submitPromptAndWait(win: BrowserWindow, model: DolaModel, prompt: string) {
   const baselineText = await getPageText(win);
   const attempts: Array<{ label: string; run: () => Promise<boolean> }> = [
     {
@@ -763,18 +894,18 @@ async function submitPromptAndWait(win: BrowserWindow, model: DoubaoModel, promp
     tried.push(attempt.label);
     const result = await waitForSubmissionStarted(win, model, baselineText, prompt, 8000);
     if (result.failureMessage) {
-      throw new DoubaoPageFailureError(
-        `豆包提交后返回失败：${result.failureMessage}`,
+      throw new DolaPageFailureError(
+        `Dola提交后返回失败：${result.failureMessage}`,
         isQuotaNotChargedFailure(result.failureMessage)
       );
     }
     if (result.confirmed || result.sentEvidence) return;
   }
 
-  const modelLabel = model === "seedance_2_0_mini" ? "Seedance 2.0 Mini" : "Seedance 2.0 Fast";
+  const modelLabel = model === "seedance_2_0" ? "Seedance 2.0" : "Seedance 2.5";
   const diagnostics = await inspectComposer(win);
   throw new Error(
-    `没有看到豆包提交确认文案：本次使用 ${modelLabel} 生成；已尝试 ${tried.join("、") || "无可用发送动作"}；${formatComposerDiagnostics(diagnostics)}`
+    `没有看到Dola提交确认文案：本次使用 ${modelLabel} 生成；已尝试 ${tried.join("、") || "无可用发送动作"}；${formatComposerDiagnostics(diagnostics)}`
   );
 }
 
@@ -915,12 +1046,12 @@ async function sendMouseClick(win: BrowserWindow, x: number, y: number) {
 
 async function waitForSubmissionStarted(
   win: BrowserWindow,
-  model: DoubaoModel,
+  model: DolaModel,
   baselineText: string,
   prompt: string,
   timeoutMs = 15000
 ) {
-  const modelLabel = model === "seedance_2_0_mini" ? "Seedance 2.0 Mini" : "Seedance 2.0 Fast";
+  const modelLabel = model === "seedance_2_0" ? "Seedance 2.0" : "Seedance 2.5";
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     const state = await runPageScript<{
@@ -933,12 +1064,12 @@ async function waitForSubmissionStarted(
         const modelLabel = ${JSON.stringify(modelLabel)};
         const baselineText = ${JSON.stringify(baselineText)};
         const prompt = ${JSON.stringify(prompt)};
-        const extractDoubaoFailureMessage = ${extractDoubaoFailureMessage.toString()};
+        const extractDolaFailureMessage = ${extractDolaFailureMessage.toString()};
         const hasNewPromptOccurrence = ${hasNewPromptOccurrence.toString()};
         const hasNewTextOccurrence = ${hasNewTextOccurrence.toString()};
         const pageText = (document.body?.innerText || "").replace(/\\s+/g, " ").trim();
         const expected = "本次使用 " + modelLabel + " 生成";
-        const failureMessage = extractDoubaoFailureMessage(pageText);
+        const failureMessage = extractDolaFailureMessage(pageText);
         const newFailureMessage = failureMessage && hasNewTextOccurrence(pageText, baselineText, failureMessage)
           ? failureMessage
           : null;
@@ -996,6 +1127,7 @@ interface GenerationPageState {
   failureMessage: string | null;
   pageText: string;
   directVideoUrl: string | null;
+  cleanVideoUrl: string | null;
   videoUrls: string[];
   visibleVideoCount: number;
   playableVideoCount: number;
@@ -1005,6 +1137,7 @@ interface GenerationPageState {
 interface GenerationResult {
   shareUrl: string | null;
   directVideoUrl: string | null;
+  cleanVideoUrl: string | null;
   shareFailureReason?: string | null;
 }
 
@@ -1036,13 +1169,13 @@ async function waitForGenerationResult(
       ? pageState.failureMessage
       : null;
     if (newFailureMessage) {
-      throw new DoubaoPageFailureError(
-        `豆包已返回视频生成失败：${newFailureMessage}`,
+      throw new DolaPageFailureError(
+        `Dola已返回视频生成失败：${newFailureMessage}`,
         isQuotaNotChargedFailure(newFailureMessage)
       );
     }
 
-    const newVideoUrls = getNewDoubaoVideoUrls(pageState.videoUrls, baselineVideoUrls);
+    const newVideoUrls = getNewDolaVideoUrls(pageState.videoUrls, baselineVideoUrls);
     const hasNewVideoSource = newVideoUrls.length > 0;
     const newVideoCount = newVideoUrls.length;
     const newPlayableVideoCount = Math.max(
@@ -1054,7 +1187,7 @@ async function waitForGenerationResult(
     if (completionTextPresent && !completionTextSeenAt) {
       completionTextSeenAt = Date.now();
     }
-    // Doubao renders the completion text before the finished card. Do not share
+    // Dola renders the completion text before the finished card. Do not share
     // until a new video card is present; a text-only result is not shareable.
     const generated = isGenerationReadyForShare({
       completionTextPresent,
@@ -1072,15 +1205,18 @@ async function waitForGenerationResult(
         await onProgress("视频已生成，正在进入分享模式并复制链接");
       }
       directVideoUrl ||= pageState.directVideoUrl;
+      if (pageState.cleanVideoUrl) {
+        return { shareUrl: null, directVideoUrl, cleanVideoUrl: pageState.cleanVideoUrl };
+      }
 
       const copied = await tryCopyShareLink(win);
       shareFailureReason = copied.reason;
       if (copied.shareUrl) {
-        return { shareUrl: copied.shareUrl, directVideoUrl };
+        return { shareUrl: copied.shareUrl, directVideoUrl, cleanVideoUrl: null };
       }
 
       if (Date.now() - generatedAt > 120000) {
-        return { shareUrl: null, directVideoUrl, shareFailureReason };
+        return { shareUrl: null, directVideoUrl, cleanVideoUrl: null, shareFailureReason };
       }
     }
 
@@ -1088,22 +1224,22 @@ async function waitForGenerationResult(
       historyFallbackAttempted = true;
       await onProgress("当前执行窗口未同步完成状态，正在检查该账号最近对话");
       const originalUrl = win.webContents.getURL();
-      const currentConversationUrl = extractDoubaoConversationUrl(win.webContents.getURL());
+      const currentConversationUrl = extractDolaConversationUrl(win.webContents.getURL());
       const recovery = await findGeneratedConversationAndCopyShare(
         win,
         prompt,
         currentConversationUrl || preferredConversationUrl
       );
       if (recovery.shareUrl) {
-        return { shareUrl: recovery.shareUrl, directVideoUrl };
+        return { shareUrl: recovery.shareUrl, directVideoUrl, cleanVideoUrl: null };
       }
       if (recovery.generatedMatchCount > 0) {
-        return { shareUrl: null, directVideoUrl, shareFailureReason: recovery.shareFailureReason };
+        return { shareUrl: null, directVideoUrl, cleanVideoUrl: null, shareFailureReason: recovery.shareFailureReason };
       }
       if (originalUrl) {
         await loadUrl(win, originalUrl);
         await wait(1500);
-        await dismissDoubaoDesktopDownloadPrompt(win);
+        await dismissDolaDesktopDownloadPrompt(win);
       }
     }
 
@@ -1112,28 +1248,28 @@ async function waitForGenerationResult(
       lastProgressAt = Date.now();
       await onProgress(generatedAt
         ? `视频已生成，正在重试复制分享链接 ${Math.floor((Date.now() - generatedAt) / 1000)}s`
-        : `已提交豆包，等待生成完成 ${elapsedSeconds}s`);
+        : `已提交Dola，等待生成完成 ${elapsedSeconds}s`);
     }
     await wait(5000);
   }
 
   if (generatedAt) {
-    return { shareUrl: null, directVideoUrl, shareFailureReason };
+    return { shareUrl: null, directVideoUrl, cleanVideoUrl: null, shareFailureReason };
   }
   await onProgress("当前执行窗口等待超时，正在最后检查该账号最近对话");
   const recovery = await findGeneratedConversationAndCopyShare(
     win,
     prompt,
-    extractDoubaoConversationUrl(win.webContents.getURL()) || preferredConversationUrl
+    extractDolaConversationUrl(win.webContents.getURL()) || preferredConversationUrl
   );
   if (recovery.shareUrl) {
-    return { shareUrl: recovery.shareUrl, directVideoUrl };
+    return { shareUrl: recovery.shareUrl, directVideoUrl, cleanVideoUrl: null };
   }
   if (recovery.generatedMatchCount > 0) {
-    return { shareUrl: null, directVideoUrl, shareFailureReason: recovery.shareFailureReason };
+    return { shareUrl: null, directVideoUrl, cleanVideoUrl: null, shareFailureReason: recovery.shareFailureReason };
   }
   throw new Error(
-    `等待豆包视频生成超时；历史链接 ${recovery.candidateCount} 条，提示词匹配 ${recovery.promptMatchCount} 条，未找到已生成视频`
+    `等待Dola视频生成超时；历史链接 ${recovery.candidateCount} 条，提示词匹配 ${recovery.promptMatchCount} 条，未找到已生成视频`
   );
 }
 
@@ -1149,9 +1285,9 @@ async function inspectGenerationPage(win: BrowserWindow, scrollToLatest = true) 
         return rect.width > 20 && rect.height > 20 && style.visibility !== "hidden" && style.display !== "none";
       };
       const pageText = (document.body?.innerText || "").replace(/\\s+/g, " ").trim();
-      const extractDoubaoFailureMessage = ${extractDoubaoFailureMessage.toString()};
-      const isDoubaoGenerationComplete = ${isDoubaoGenerationComplete.toString()};
-      const isDoubaoPromptRewritePage = ${isDoubaoPromptRewritePage.toString()};
+      const extractDolaFailureMessage = ${extractDolaFailureMessage.toString()};
+      const isDolaGenerationComplete = ${isDolaGenerationComplete.toString()};
+      const isDolaPromptRewritePage = ${isDolaPromptRewritePage.toString()};
       const videos = Array.from(document.querySelectorAll("video")).filter(visible);
       const videoCardImages = Array.from(document.querySelectorAll("img")).filter((image) => {
         if (!visible(image)) return false;
@@ -1173,20 +1309,29 @@ async function inspectGenerationPage(win: BrowserWindow, scrollToLatest = true) 
         ...Array.from(video.querySelectorAll("source[src]")).map((source) => source.src)
       ].filter(Boolean));
       const videoSources = videoSourceLists.flat();
-      const videoUrls = videoSources.filter((value) => /^https?:\\/\\//i.test(value || ""));
-      const completedByText = isDoubaoGenerationComplete(pageText);
-      const promptRewrite = isDoubaoPromptRewritePage(pageText);
+      const capturedMedia = Array.isArray(globalThis.__dolaMediaItems)
+        ? globalThis.__dolaMediaItems.filter((item) => item && item.type === "video" && /^https?:\\/\\//i.test(item.url || ""))
+        : [];
+      const capturedVideoUrls = capturedMedia.map((item) => item.url);
+      const videoUrls = Array.from(new Set([
+        ...videoSources.filter((value) => /^https?:\\/\\//i.test(value || "")),
+        ...capturedVideoUrls
+      ]));
+      const cleanVideoUrls = capturedMedia.filter((item) => item.clean === true).map((item) => item.url);
+      const completedByText = isDolaGenerationComplete(pageText);
+      const promptRewrite = isDolaPromptRewritePage(pageText);
       const playableVideoCount = videos.filter((video, index) => (
         video.readyState >= 1 || videoSourceLists[index].length > 0
       )).length;
       const playableVideo = playableVideoCount > 0;
-      const failureMessage = extractDoubaoFailureMessage(pageText);
+      const failureMessage = extractDolaFailureMessage(pageText);
       return {
         generated: completedByText || (!promptRewrite && playableVideo),
         failed: Boolean(failureMessage),
         failureMessage,
         pageText,
         directVideoUrl: videoUrls[videoUrls.length - 1] || null,
+        cleanVideoUrl: cleanVideoUrls[cleanVideoUrls.length - 1] || null,
         videoUrls,
         visibleVideoCount: videos.length,
         playableVideoCount,
@@ -1226,7 +1371,7 @@ async function findGeneratedConversationAndCopyShare(
         .filter(({ href }) => {
           try {
             const url = new URL(href);
-            return /^(?:www\\.)?doubao\\.com$/i.test(url.hostname)
+            return /^(?:www\\.)?dola\\.com$/i.test(url.hostname)
               && /^\\/chat\\/[A-Za-z0-9._~-]+/i.test(url.pathname);
           } catch {
             return false;
@@ -1240,7 +1385,7 @@ async function findGeneratedConversationAndCopyShare(
         .slice(0, 30);
     })()
   `);
-  const preferredUrl = extractDoubaoConversationUrl(preferredConversationUrl);
+  const preferredUrl = extractDolaConversationUrl(preferredConversationUrl);
   const orderedCandidates = Array.from(new Set([
     preferredUrl,
     ...candidates
@@ -1264,11 +1409,11 @@ async function findGeneratedConversationAndCopyShare(
       // newest conversation is normally near the front of this list.
       await loadUrl(win, candidate, 8000);
     } catch (error) {
-      console.warn("跳过无法加载的豆包历史对话", candidate, error);
+      console.warn("跳过无法加载的Dola历史对话", candidate, error);
       continue;
     }
     await wait(600);
-    await dismissDoubaoDesktopDownloadPrompt(win);
+    await dismissDolaDesktopDownloadPrompt(win);
 
     let pageText = "";
     let matchedPrompt = false;
@@ -1333,12 +1478,12 @@ async function tryCopyShareLink(win: BrowserWindow) {
     if (win.isDestroyed()) return { shareUrl: null, reason: "执行窗口已关闭" } satisfies ShareCopyResult;
 
     const before = clipboard.readText();
-    const clipboardSentinel = `__doubao_share_${Date.now()}_${Math.random().toString(36).slice(2)}__`;
+    const clipboardSentinel = `__dola_share_${Date.now()}_${Math.random().toString(36).slice(2)}__`;
     clipboard.writeText(clipboardSentinel);
     let result: ShareCopyResult = { shareUrl: null, reason: "未找到分享面板" };
 
     try {
-      await dismissDoubaoDesktopDownloadPrompt(win);
+      await dismissDolaDesktopDownloadPrompt(win);
 
       const generationState = await inspectGenerationPage(win, false);
       if (generationState.failureMessage) {
@@ -1357,7 +1502,7 @@ async function tryCopyShareLink(win: BrowserWindow) {
 
       const acceptCopiedShareUrl = async (shareUrl: string) => {
         try {
-          await verifyDoubaoShareVideoResource(shareUrl);
+          await verifyDolaShareVideoResource(shareUrl);
           result = { shareUrl, reason: null };
           return true;
         } catch (error) {
@@ -1370,7 +1515,7 @@ async function tryCopyShareLink(win: BrowserWindow) {
 
       if (!shareState.active) {
         await openShareSelection(win);
-        const directlyCopiedUrl = extractDoubaoShareUrl(clipboard.readText());
+        const directlyCopiedUrl = extractDolaShareUrl(clipboard.readText());
         if (directlyCopiedUrl) {
           if (await acceptCopiedShareUrl(directlyCopiedUrl)) return result;
         }
@@ -1409,7 +1554,7 @@ async function tryCopyShareLink(win: BrowserWindow) {
         return result;
       }
 
-      // A native input event is the reliable path for Doubao's clipboard handler.
+      // A native input event is the reliable path for Dola's clipboard handler.
       await sendMouseClick(win, copyPoint.x, copyPoint.y);
       const nativeCopiedUrl = await waitForClipboardShareUrl(CLIPBOARD_WAIT_MS);
       if (nativeCopiedUrl) {
@@ -1423,13 +1568,13 @@ async function tryCopyShareLink(win: BrowserWindow) {
       if (domCopiedUrl) {
         await acceptCopiedShareUrl(domCopiedUrl);
       } else if (!result.reason) {
-        result = { shareUrl: null, reason: "点击复制链接后剪贴板未出现豆包分享地址" };
+        result = { shareUrl: null, reason: "点击复制链接后剪贴板未出现Dola分享地址" };
       }
       return result;
     } catch (error) {
       // Share panels are animated and can be replaced while the generation card
       // updates. Treat a transient inspection error as a retryable miss.
-      console.warn("豆包复制分享链接暂时失败", error);
+      console.warn("Dola复制分享链接暂时失败", error);
       result = { shareUrl: null, reason: `复制控件检查异常：${errorMessage(error)}` };
       return result;
     } finally {
@@ -1438,7 +1583,7 @@ async function tryCopyShareLink(win: BrowserWindow) {
   });
 }
 
-async function dismissDoubaoDesktopDownloadPrompt(win: BrowserWindow) {
+async function dismissDolaDesktopDownloadPrompt(win: BrowserWindow) {
   if (win.isDestroyed()) return false;
 
   const prompt = await runPageScript<{
@@ -1446,9 +1591,9 @@ async function dismissDoubaoDesktopDownloadPrompt(win: BrowserWindow) {
     action: "remind_later" | "close" | null;
   }>(win, `
     (() => {
-      const isDoubaoDesktopDownloadPrompt = ${isDoubaoDesktopDownloadPrompt.toString()};
+      const isDolaDesktopDownloadPrompt = ${isDolaDesktopDownloadPrompt.toString()};
       const pageText = document.body?.innerText || "";
-      if (!isDoubaoDesktopDownloadPrompt(pageText)) {
+      if (!isDolaDesktopDownloadPrompt(pageText)) {
         return { detected: false, action: null };
       }
 
@@ -1498,16 +1643,16 @@ async function dismissDoubaoDesktopDownloadPrompt(win: BrowserWindow) {
     await wait(450);
   }
 
-  // Some Doubao builds accept the click but leave the modal mounted for a
+  // Some Dola builds accept the click but leave the modal mounted for a
   // short period. Verify the marker is gone before trying the share controls.
   // Esc is harmless when the modal has already closed and prevents a stale
   // overlay from swallowing the next click when it has not.
   try {
     const stillVisible = await runPageScript<boolean>(win, `
       (() => {
-        const isDoubaoDesktopDownloadPrompt = ${isDoubaoDesktopDownloadPrompt.toString()};
+        const isDolaDesktopDownloadPrompt = ${isDolaDesktopDownloadPrompt.toString()};
         const pageText = document.body?.innerText || "";
-        if (!isDoubaoDesktopDownloadPrompt(pageText)) return false;
+        if (!isDolaDesktopDownloadPrompt(pageText)) return false;
         const visible = (el) => {
           const rect = el.getBoundingClientRect();
           const style = getComputedStyle(el);
@@ -1539,11 +1684,11 @@ async function dismissDoubaoDesktopDownloadPrompt(win: BrowserWindow) {
 async function waitForClipboardShareUrl(timeoutMs = CLIPBOARD_WAIT_MS) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
-    const shareUrl = extractDoubaoShareUrl(clipboard.readText());
+    const shareUrl = extractDolaShareUrl(clipboard.readText());
     if (shareUrl) return shareUrl;
     await wait(Math.min(150, Math.max(25, timeoutMs - (Date.now() - startedAt))));
   }
-  return extractDoubaoShareUrl(clipboard.readText());
+  return extractDolaShareUrl(clipboard.readText());
 }
 
 async function primeGeneratedVideoCard(win: BrowserWindow) {
@@ -1630,7 +1775,7 @@ async function waitForTextControlPoint(
 
 function restoreClipboardAfterFailedShare(before: string, sentinel: string) {
   const current = clipboard.readText();
-  if (current === sentinel || !extractDoubaoShareUrl(current)) {
+  if (current === sentinel || !extractDolaShareUrl(current)) {
     clipboard.writeText(before);
   }
 }
@@ -1683,7 +1828,7 @@ async function openShareSelection(win: BrowserWindow) {
     await sendKeyboard(win, "ESC", undefined, 250);
   }
 
-  // Some Doubao builds label the video-card entry as “分享图片”. It is the
+  // Some Dola builds label the video-card entry as “分享图片”. It is the
   // share entry for the current media card, not a page-level share action.
   const sharePoint = await waitForTextControlPoint(win, ["分享图片", "分享"], [], 1800);
   if (sharePoint) {
@@ -1704,7 +1849,7 @@ async function openShareSelection(win: BrowserWindow) {
     await sendKeyboard(win, "ESC", undefined, 250);
   }
 
-  // On some Doubao builds the message toolbar is icon-only. Its action order is
+  // On some Dola builds the message toolbar is icon-only. Its action order is
   // copy, share, edit, more; use the button immediately before edit when labels
   // are absent as a final fallback after the verified header menu path.
   const shareIconPoint = await findShareIconPoint(win);
@@ -1902,12 +2047,12 @@ async function findOverflowMenuPoint(win: BrowserWindow) {
 }
 
 async function waitForSubmittedConversationUrl(win: BrowserWindow, timeoutMs = 2600) {
-  let conversationUrl = extractDoubaoConversationUrl(win.webContents.getURL());
+  let conversationUrl = extractDolaConversationUrl(win.webContents.getURL());
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs
     && (!conversationUrl || /\/chat\/local_/i.test(conversationUrl))) {
     await wait(200);
-    const currentUrl = extractDoubaoConversationUrl(win.webContents.getURL());
+    const currentUrl = extractDolaConversationUrl(win.webContents.getURL());
     if (currentUrl) conversationUrl = currentUrl;
   }
   return conversationUrl;
@@ -2047,13 +2192,14 @@ function errorMessage(error: unknown) {
 function operationAction(message: string, status?: ApiRequestStatus) {
   if (status === "success") return "任务完成";
   if (status === "failed") return "任务失败";
+  if (status === "stopped") return "取消任务";
   if (message.includes("上传参考图")) return "上传参考图";
   if (message.includes("填写提示词")) return "填写提示词";
-  if (message.includes("切换豆包视频生成模式")) return "切换视频生成模式";
-  if (message.includes("提交豆包")) return "提交视频任务";
+  if (message.includes("切换Dola视频生成模式")) return "切换视频生成模式";
+  if (message.includes("提交Dola")) return "提交视频任务";
   if (message.includes("复制分享")) return "复制分享地址";
   if (message.includes("去水印")) return "去水印解析";
-  if (message.includes("等待视频") || message.includes("定位豆包")) return "等待视频结果";
+  if (message.includes("等待视频") || message.includes("定位Dola")) return "等待视频结果";
   return "任务进度";
 }
 
@@ -2067,7 +2213,11 @@ function formatWatermarkResolution(input: { elapsedMs: number; retryCount: numbe
 }
 
 function isRefundableExecutionError(error: unknown) {
-  return error instanceof DoubaoPageFailureError && error.refundQuota;
+  return error instanceof DolaPageFailureError && error.refundQuota;
+}
+
+function isDestroyedWindowError(error: unknown) {
+  return /object has been destroyed|webcontents (?:was |has been )?destroyed|render frame was disposed/i.test(errorMessage(error));
 }
 
 function wait(ms: number) {

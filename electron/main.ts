@@ -6,7 +6,8 @@ import { fileURLToPath } from "node:url";
 import { app, BrowserWindow, ipcMain, session } from "electron";
 import log from "electron-log/main.js";
 import { AppDatabase } from "./database.js";
-import { DoubaoExecutor } from "./executor.js";
+import { DolaExecutor } from "./executor.js";
+import { ensureDolaExtension } from "./extension-loader.js";
 import { toPublicApiRequest } from "./public-api.js";
 import type {
   AccountUpdateInput,
@@ -14,7 +15,7 @@ import type {
   ApiServerStatus,
   AppSettings,
   AppSettingsUpdateInput,
-  DoubaoModel,
+  DolaModel,
   GenerateRequestBody
 } from "./types.js";
 import { resolveCleanVideoUrl } from "./watermark.js";
@@ -24,7 +25,7 @@ const __dirname = path.dirname(__filename);
 
 let mainWindow: BrowserWindow | null = null;
 let db: AppDatabase;
-let executor: DoubaoExecutor;
+let executor: DolaExecutor;
 let apiServer: LocalApiServer;
 
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
@@ -42,7 +43,7 @@ class LocalApiServer {
 
   constructor(
     private readonly database: AppDatabase,
-    private readonly requestExecutor: DoubaoExecutor
+    private readonly requestExecutor: DolaExecutor
   ) {}
 
   async applySettings(settings: AppSettings) {
@@ -117,7 +118,7 @@ class LocalApiServer {
       if (request.method === "GET" && requestUrl.pathname === "/health") {
         sendJson(response, 200, {
           ok: true,
-          service: "doubao-account-pool",
+          service: "dola-account-pool",
           api: this.getStatus()
         });
         return;
@@ -134,7 +135,7 @@ class LocalApiServer {
       }
 
       if (request.method === "POST" && requestUrl.pathname === "/api/generate") {
-        const requestId = `doubao-${randomUUID().replaceAll("-", "").slice(0, 16)}`;
+        const requestId = `dola-${randomUUID().replaceAll("-", "").slice(0, 16)}`;
         const body = await readGenerateRequest(request, requestId);
         const prompt = body.prompt?.trim();
         if (!prompt) {
@@ -152,7 +153,7 @@ class LocalApiServer {
         const account = settings.executorEnabled
           ? this.database.reserveAvailableAccount(model)
           : this.database.findAvailableAccount(model);
-        const cost = model === "seedance_2_0_mini" ? settings.miniCost : settings.fastCost;
+        const cost = model === "seedance_2_0" ? settings.seedance20Cost : settings.seedance25Cost;
 
         if (!account) {
           const failed = this.database.createApiRequest({
@@ -297,7 +298,7 @@ function createMainWindow() {
     height: 760,
     minWidth: 980,
     minHeight: 640,
-    title: "豆包账号池接口服务",
+    title: "Dola账号池接口服务",
     webPreferences: {
       preload: path.join(__dirname, "preload/preload.cjs"),
       contextIsolation: true,
@@ -313,15 +314,17 @@ function createMainWindow() {
   }
 }
 
-function createDoubaoWindow(accountId: number) {
+async function createDolaWindow(accountId: number) {
   const account = db.getAccount(accountId);
   if (!account) throw new Error("Account not found");
 
+  const accountSession = session.fromPartition(account.partition);
+  await ensureDolaExtension(accountSession, account.partition);
   const titleName = account.remark || account.name;
   const win = new BrowserWindow({
     width: 1320,
     height: 860,
-    title: `豆包 - ${titleName}`,
+    title: `Dola - ${titleName}`,
     webPreferences: {
       partition: account.partition,
       contextIsolation: true,
@@ -330,7 +333,7 @@ function createDoubaoWindow(accountId: number) {
     }
   });
 
-  void win.loadURL("https://www.doubao.com/chat");
+  void win.loadURL("https://www.dola.com/chat");
 }
 
 async function detectLoginStatus(accountId: number) {
@@ -338,7 +341,7 @@ async function detectLoginStatus(accountId: number) {
   if (!account) throw new Error("Account not found");
 
   const accountSession = session.fromPartition(account.partition);
-  const cookies = await accountSession.cookies.get({ url: "https://www.doubao.com" });
+  const cookies = await accountSession.cookies.get({ url: "https://www.dola.com" });
   const activeRequest = db.listApiRequests(1000).some((request) =>
     request.accountId === accountId && (request.status === "accepted" || request.status === "running")
   );
@@ -390,18 +393,18 @@ function registerIpc() {
   ipcMain.handle("accounts:delete", async (_event, id: number) => {
     const account = db.getAccount(id);
     await clearAccountSession(id);
-    db.deleteAccount(id);
     recordOperation(null, id, "删除账号", "success", `已删除 ${account?.partition || id}`);
+    db.deleteAccount(id);
     return true;
   });
-  ipcMain.handle("accounts:open", (_event, id: number) => {
-    const result = createDoubaoWindow(id);
-    recordOperation(null, id, "打开豆包窗口", "success", "已打开独立账号窗口");
-    return result;
+  ipcMain.handle("accounts:open", async (_event, id: number) => {
+    await createDolaWindow(id);
+    recordOperation(null, id, "打开Dola窗口", "success", "已打开独立账号窗口");
+    return true;
   });
   ipcMain.handle("accounts:relogin", async (_event, id: number) => {
     await clearAccountSession(id);
-    createDoubaoWindow(id);
+    await createDolaWindow(id);
     recordOperation(null, id, "重新登录账号", "success", "已清空登录状态并打开登录窗口");
     return true;
   });
@@ -465,8 +468,8 @@ function notifyDataChanged() {
   mainWindow?.webContents.send("data:changed");
 }
 
-function normalizeModel(model: string): DoubaoModel | null {
-  if (model === "seedance_2_0_mini" || model === "seedance_2_0_fast") return model;
+function normalizeModel(model: string): DolaModel | null {
+  if (model === "seedance_2_0" || model === "seedance_2_5") return model;
   return null;
 }
 
@@ -537,7 +540,7 @@ async function parseMultipartGenerateRequest(buffer: Buffer, contentType: string
   }
 
   return {
-    model: fields.model as DoubaoModel | undefined,
+    model: fields.model as DolaModel | undefined,
     prompt: fields.prompt || "",
     referenceImagePath: uploadedReferenceImagePath || fields.referenceImagePath || null,
     referenceImageUrl: fields.referenceImageUrl || null,
@@ -676,7 +679,7 @@ if (!hasSingleInstanceLock) {
   app.whenReady().then(async () => {
     log.initialize();
     db = new AppDatabase();
-    executor = new DoubaoExecutor(db, notifyDataChanged);
+    executor = new DolaExecutor(db, notifyDataChanged);
     apiServer = new LocalApiServer(db, executor);
     registerIpc();
     await apiServer.applySettings(db.getSettings());

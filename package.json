@@ -1,7 +1,7 @@
 {
-  "name": "doubao-account-manager",
+  "name": "dola-account-manager",
   "version": "0.1.30",
-  "description": "豆包多账号隔离登录、额度调度和本地视频生成接口服务",
+  "description": "Dola多账号隔离登录、额度调度和本地视频生成接口服务",
   "main": "dist-electron/main.js",
   "type": "module",
   "scripts": {
@@ -13,7 +13,7 @@
     "dist:win": "npm run build && electron-builder --win nsis --x64",
     "test:unit": "npm run build && node --test tests/*.test.mjs",
     "test:watermark": "npm run build && node --test tests/watermark.test.mjs",
-    "verify:mac": "codesign --verify --deep --strict --verbose=4 'release/mac-arm64/豆包账号池接口服务.app'",
+    "verify:mac": "codesign --verify --deep --strict --verbose=4 'release/mac-arm64/Dola账号池接口服务.app'",
     "typecheck": "vue-tsc --noEmit && tsc -p tsconfig.electron.json --noEmit"
   },
   "dependencies": {
@@ -37,14 +37,15 @@
   },
   "build": {
     "afterPack": "scripts/after-pack.cjs",
-    "appId": "com.local.doubao-account-manager",
-    "productName": "豆包账号池接口服务",
+    "appId": "com.local.dola-account-manager",
+    "productName": "Dola账号池接口服务",
     "directories": {
       "output": "release"
     },
     "files": [
       "dist/**/*",
       "dist-electron/**/*",
+      "extensions/**/*",
       "package.json"
     ],
     "mac": {
@@ -70,10 +71,11 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "豆包账号池"
+      "shortcutName": "Dola账号池"
     },
     "asarUnpack": [
-      "**/*.node"
+      "**/*.node",
+      "extensions/**/*"
     ]
   }
 }

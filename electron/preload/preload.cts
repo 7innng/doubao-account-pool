@@ -39,6 +39,6 @@ const api = {
   }
 };
 
-contextBridge.exposeInMainWorld("doubaoManager", api);
+contextBridge.exposeInMainWorld("dolaManager", api);
 
-export type DoubaoManagerApi = typeof api;
+export type DolaManagerApi = typeof api;

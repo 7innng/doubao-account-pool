@@ -4,7 +4,7 @@
 
 - 默认地址：`http://127.0.0.1:17888`
 - 当前接口版本：`0.1.30`
-- 默认认证：`Authorization: Bearer local-doubao-key`
+- 默认认证：`Authorization: Bearer local-dola-key`
 - 除 `/health` 外，其余接口均需要 Bearer Token。
 - 建议在“配置管理”中修改默认 API Key。
 
@@ -34,7 +34,7 @@ Content-Type: multipart/form-data
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
 | `prompt` | 是 | 视频提示词 |
-| `model` | 否 | `seedance_2_0_mini` 或 `seedance_2_0_fast` |
+| `model` | 否 | `seedance_2_0` 或 `seedance_2_5` |
 | `referenceImage` | 否 | 上传的参考图片文件 |
 | `referenceImagePath` | 否 | 本机参考图片绝对路径 |
 | `referenceImageUrl` | 否 | 可下载的参考图片 URL |
@@ -42,6 +42,8 @@ Content-Type: multipart/form-data
 | `source` | 否 | 请求来源名称 |
 
 生成请求固定执行最终 MP4 结果验证。去水印失败、平台不支持或没有取得可播放 MP4 时，任务状态为 `failed`。
+
+选择 `seedance_2_5` 时，执行器会在真正发送前确认Dola页面处于视频生成模式、模型为 Seedance 2.5、工具栏显示 `30s` 且内置扩展已开启。任一条件不满足会直接返回失败，不会误发成较短时长。软件内的“API 调试”页可以提交同一个接口，并自动轮询最终结果；勾选“显示 Dola 浏览器执行窗口”可现场观察执行过程。
 
 ## 查询任务状态
 
@@ -55,7 +57,7 @@ Authorization: Bearer <api-key>
 | 状态 | 说明 |
 | --- | --- |
 | `accepted` | 已接收并进入队列 |
-| `running` | 正在操作豆包或等待生成 |
+| `running` | 正在操作Dola或等待生成 |
 | `success` | 已取得经过验证的 MP4 地址或本地 MP4 文件 |
 | `failed` | 提交、生成、解析或 MP4 验证失败 |
 | `stopped` | 任务已停止 |
@@ -87,7 +89,7 @@ Content-Type: application/json
 
 ## 成功语义
 
-外部接口不会把豆包分享页、聊天页或 thread 页面地址当作视频结果。只有满足以下任一条件才返回 `status: "success"`：
+外部接口不会把Dola分享页、聊天页或 thread 页面地址当作视频结果。只有满足以下任一条件才返回 `status: "success"`：
 
 - `cleanVideoUrl` 是经过验证、可访问的 MP4 视频地址。
 - `outputVideoPath` 是已经保存成功的本地 `.mp4` 文件路径。

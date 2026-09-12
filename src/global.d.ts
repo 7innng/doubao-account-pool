@@ -10,7 +10,7 @@ import type {
 
 declare global {
   interface Window {
-    doubaoManager: {
+    dolaManager: {
       accounts: {
         list: () => Promise<Account[]>;
         create: (remark?: string) => Promise<Account>;

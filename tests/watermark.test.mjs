@@ -4,21 +4,21 @@ import test from 'node:test'
 import {
   extractVideoUrlFromPayload,
   getWatermarkRetryDelays,
-  hasDoubaoShareVideoResource,
+  hasDolaShareVideoResource,
   isMp4VideoUrl,
   isRetryableWatermarkError,
   WATERMARK_RETRY_DELAYS_MS,
 } from '../dist-electron/watermark.js'
 
-test('requires a real video resource in a copied Doubao share page', () => {
+test('requires a real video resource in a copied Dola share page', () => {
   const valid = `
     你的视频生成好了。
     {\\"creation_block\\":{\\"video\\":{\\"cover\\":\\"video_dsz_watermark_1_6.png\\",
     \\"video_type\\":\\"mp4\\",\\"download_url\\":\\"https:\\u002F\\u002Fcdn.example.com\\u002Fvideo?mime_type=video_mp4\\"}}}
   `
-  assert.equal(hasDoubaoShareVideoResource(valid), true)
-  assert.equal(hasDoubaoShareVideoResource('你的视频生成好了，但只有普通对话内容'), false)
-  assert.equal(hasDoubaoShareVideoResource('download_url mime_type=video_mp4'), false)
+  assert.equal(hasDolaShareVideoResource(valid), true)
+  assert.equal(hasDolaShareVideoResource('你的视频生成好了，但只有普通对话内容'), false)
+  assert.equal(hasDolaShareVideoResource('download_url mime_type=video_mp4'), false)
 })
 
 test('extracts a nested MP4 result', () => {

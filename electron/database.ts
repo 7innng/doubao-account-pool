@@ -12,7 +12,7 @@ import type {
   ApiRequestUpdateInput,
   AppSettings,
   AppSettingsUpdateInput,
-  DoubaoModel,
+  DolaModel,
   OperationLog,
   OperationLogCreateInput
 } from "./types.js";
@@ -23,15 +23,15 @@ const OPERATION_LOG_RETENTION_DAYS = 3;
 const DEFAULT_SETTINGS: AppSettings = {
   apiServiceEnabled: true,
   apiPort: 17888,
-  apiKey: "local-doubao-key",
+  apiKey: "local-dola-key",
   executorEnabled: true,
   showExecutorWindow: false,
   autoCloseExecutorWindow: true,
-  doubaoChatUrl: "https://www.doubao.com/chat",
-  defaultModel: "seedance_2_0_mini",
+  dolaChatUrl: "https://www.dola.com/chat",
+  defaultModel: "seedance_2_0",
   dailyQuotaLimit: 10,
-  miniCost: 2,
-  fastCost: 3,
+  seedance20Cost: 2,
+  seedance25Cost: 3,
   dailyResetTime: "00:00",
   generationTimeoutSeconds: 900,
   maxConcurrentAccounts: 4,
@@ -46,7 +46,7 @@ export class AppDatabase {
   private readonly db: Database.Database;
 
   constructor() {
-    const dbPath = path.join(app.getPath("userData"), "doubao-manager.sqlite3");
+    const dbPath = path.join(app.getPath("userData"), "dola-manager.sqlite3");
     this.db = new Database(dbPath);
     this.db.pragma("journal_mode = WAL");
     this.migrate();
@@ -87,7 +87,7 @@ export class AppDatabase {
         reference_image_path TEXT,
         remove_watermark INTEGER NOT NULL DEFAULT 1,
         callback_url TEXT,
-        doubao_thread_url TEXT,
+        dola_thread_url TEXT,
         raw_video_url TEXT,
         clean_video_url TEXT,
         output_video_path TEXT,
@@ -166,7 +166,7 @@ export class AppDatabase {
     const settings = this.getSettings();
     const nextNumber = this.nextAccountNumber();
     const name = `账号 ${String(nextNumber).padStart(3, "0")}`;
-    const partition = `persist:doubao_account_${String(nextNumber).padStart(3, "0")}`;
+    const partition = `persist:dola_account_${String(nextNumber).padStart(3, "0")}`;
 
     const result = this.db.prepare(`
       INSERT INTO accounts (
@@ -269,9 +269,9 @@ export class AppDatabase {
     return this.listAccounts();
   }
 
-  findAvailableAccount(model: DoubaoModel): Account | undefined {
+  findAvailableAccount(model: DolaModel): Account | undefined {
     const settings = this.getSettings();
-    const requiredQuota = model === "seedance_2_0_mini" ? settings.miniCost : settings.fastCost;
+    const requiredQuota = model === "seedance_2_0" ? settings.seedance20Cost : settings.seedance25Cost;
     return this.db.prepare(`
       SELECT
         id,
@@ -298,7 +298,7 @@ export class AppDatabase {
     `).get(requiredQuota) as Account | undefined;
   }
 
-  reserveAvailableAccount(model: DoubaoModel): Account | undefined {
+  reserveAvailableAccount(model: DolaModel): Account | undefined {
     return this.db.transaction(() => {
       const account = this.findAvailableAccount(model);
       if (!account) return undefined;
@@ -307,9 +307,9 @@ export class AppDatabase {
     })();
   }
 
-  deductQuota(accountId: number, model: DoubaoModel): Account {
+  deductQuota(accountId: number, model: DolaModel): Account {
     const settings = this.getSettings();
-    const cost = model === "seedance_2_0_mini" ? settings.miniCost : settings.fastCost;
+    const cost = model === "seedance_2_0" ? settings.seedance20Cost : settings.seedance25Cost;
     const timestamp = now();
     this.db.prepare(`
       UPDATE accounts
@@ -322,9 +322,9 @@ export class AppDatabase {
     return this.getAccount(accountId)!;
   }
 
-  refundQuota(accountId: number, model: DoubaoModel): Account {
+  refundQuota(accountId: number, model: DolaModel): Account {
     const settings = this.getSettings();
-    const cost = model === "seedance_2_0_mini" ? settings.miniCost : settings.fastCost;
+    const cost = model === "seedance_2_0" ? settings.seedance20Cost : settings.seedance25Cost;
     const timestamp = now();
     this.db.prepare(`
       UPDATE accounts
@@ -367,10 +367,10 @@ export class AppDatabase {
       executorEnabled: Boolean(input.executorEnabled ?? current.executorEnabled),
       showExecutorWindow: Boolean(input.showExecutorWindow ?? current.showExecutorWindow),
       autoCloseExecutorWindow: Boolean(input.autoCloseExecutorWindow ?? current.autoCloseExecutorWindow),
-      doubaoChatUrl: String(input.doubaoChatUrl || current.doubaoChatUrl || DEFAULT_SETTINGS.doubaoChatUrl),
+      dolaChatUrl: String(input.dolaChatUrl || current.dolaChatUrl || DEFAULT_SETTINGS.dolaChatUrl),
       dailyQuotaLimit: clampInt(input.dailyQuotaLimit ?? current.dailyQuotaLimit),
-      miniCost: Math.max(1, clampInt(input.miniCost ?? current.miniCost)),
-      fastCost: Math.max(1, clampInt(input.fastCost ?? current.fastCost)),
+      seedance20Cost: Math.max(1, clampInt(input.seedance20Cost ?? current.seedance20Cost)),
+      seedance25Cost: Math.max(1, clampInt(input.seedance25Cost ?? current.seedance25Cost)),
       generationTimeoutSeconds: clampInt(input.generationTimeoutSeconds ?? current.generationTimeoutSeconds),
       maxConcurrentAccounts: Math.max(1, clampInt(input.maxConcurrentAccounts ?? current.maxConcurrentAccounts)),
       retryCount: clampInt(input.retryCount ?? current.retryCount)
@@ -407,7 +407,7 @@ export class AppDatabase {
         api_requests.reference_image_path AS referenceImagePath,
         api_requests.remove_watermark AS removeWatermark,
         api_requests.callback_url AS callbackUrl,
-        api_requests.doubao_thread_url AS doubaoThreadUrl,
+        api_requests.dola_thread_url AS dolaThreadUrl,
         api_requests.raw_video_url AS rawVideoUrl,
         api_requests.clean_video_url AS cleanVideoUrl,
         api_requests.output_video_path AS outputVideoPath,
@@ -437,7 +437,7 @@ export class AppDatabase {
         api_requests.reference_image_path AS referenceImagePath,
         api_requests.remove_watermark AS removeWatermark,
         api_requests.callback_url AS callbackUrl,
-        api_requests.doubao_thread_url AS doubaoThreadUrl,
+        api_requests.dola_thread_url AS dolaThreadUrl,
         api_requests.raw_video_url AS rawVideoUrl,
         api_requests.clean_video_url AS cleanVideoUrl,
         api_requests.output_video_path AS outputVideoPath,
@@ -509,7 +509,7 @@ export class AppDatabase {
       SET
         status = ?,
         message = ?,
-        doubao_thread_url = ?,
+        dola_thread_url = ?,
         raw_video_url = ?,
         clean_video_url = ?,
         output_video_path = ?,
@@ -519,7 +519,7 @@ export class AppDatabase {
     `).run(
       status,
       input.message ?? existing.message,
-      input.doubaoThreadUrl ?? existing.doubaoThreadUrl,
+      input.dolaThreadUrl ?? existing.dolaThreadUrl,
       input.rawVideoUrl ?? existing.rawVideoUrl,
       input.cleanVideoUrl ?? existing.cleanVideoUrl,
       input.outputVideoPath ?? existing.outputVideoPath,
@@ -661,7 +661,7 @@ export class AppDatabase {
     this.addColumnIfMissing("api_requests", "reference_image_path", "TEXT");
     this.addColumnIfMissing("api_requests", "remove_watermark", "INTEGER NOT NULL DEFAULT 1");
     this.addColumnIfMissing("api_requests", "callback_url", "TEXT");
-    this.addColumnIfMissing("api_requests", "doubao_thread_url", "TEXT");
+    this.addColumnIfMissing("api_requests", "dola_thread_url", "TEXT");
     this.addColumnIfMissing("api_requests", "raw_video_url", "TEXT");
     this.addColumnIfMissing("api_requests", "clean_video_url", "TEXT");
     this.addColumnIfMissing("api_requests", "output_video_path", "TEXT");
@@ -698,7 +698,7 @@ export class AppDatabase {
   private nextAccountNumber(): number {
     const rows = this.db.prepare("SELECT partition FROM accounts").all() as Array<{ partition: string }>;
     const used = rows
-      .map((row) => row.partition.match(/^persist:doubao_account_(\d+)$/)?.[1])
+      .map((row) => row.partition.match(/^persist:dola_account_(\d+)$/)?.[1])
       .filter((value): value is string => Boolean(value))
       .map((value) => Number(value));
 

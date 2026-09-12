@@ -1,6 +1,6 @@
-# 豆包账号池
+# Dola账号池
 
-豆包账号池是一款基于 Electron 的本地桌面工具，用于管理多个相互隔离的豆包登录环境，并通过本地 HTTP API 为无限画布或其他工作流提供视频生成能力。
+Dola账号池是一款基于 Electron 的本地桌面工具，用于管理多个相互隔离的Dola登录环境，并通过本地 HTTP API 为无限画布或其他工作流提供视频生成能力。
 
 当前版本：`0.1.30`
 
@@ -11,10 +11,12 @@
 - 共享额度管理：默认每个账号每日 10 点额度，Mini 消耗 2 点，Fast 消耗 3 点，均可在配置页调整。
 - 账号池调度：自动选择已登录、空闲且额度充足的账号执行请求。
 - 后台视频生成：支持文本提示词和参考图片，跟踪等待、执行、成功和失败状态。
+- 30 秒模式：Seedance 2.5 请求在发送前强制校验“视频生成、2.5、30s、扩展开启”，校验失败时不会提交。
+- 内嵌 API 调试：可在软件内填写请求、提交真实本地 API、自动轮询结果，并按需显示Dola执行窗口。
 - 严格结果输出：只有取得经过验证的真实 MP4 地址或本地 MP4 文件后，任务才会返回 `success`。
 - 可选去水印：可配置第三方解析接口；只在取得并验证 MP4 后返回 `success`，解析失败或未取得 MP4 时返回 `failed`。
 - 本地接口服务：默认监听 `127.0.0.1:17888`，支持 API Key、状态查询和回调地址。
-- 可观测界面：提供账号概览、剩余额度、Mini/Fast 预计产能、搜索筛选和接口日志详情。
+- 可观测界面：提供账号概览、剩余额度、Seedance 2.0/2.5 预计产能、搜索筛选和接口日志详情。
 - 行动日志：逐步记录账号、任务、分享地址、去水印和错误信息，默认保留 3 天并自动清理。
 - 结果恢复与诊断：支持从账号最近对话恢复已生成视频，日志显示分享复制、去水印重试和耗时信息。
 - 跨平台安装包：提供 macOS Apple Silicon DMG 和 Windows x64 EXE。
@@ -31,7 +33,7 @@ macOS 应用已进行完整 ad-hoc 签名，避免因 Electron 临时签名不�
 ## 快速开始
 
 1. 安装并启动应用。
-2. 点击“添加账号”，在打开的独立豆包窗口中完成登录。
+2. 点击“添加账号”，在打开的独立Dola窗口中完成登录。
 3. 返回账号池执行检测，确认账号显示为“已登录”和“空闲”。
 4. 在“配置管理”中设置 API Key、模型额度、执行策略、去水印 Token 和输出目录。
 5. 从无限画布或其他本地工作流调用生成接口。
@@ -42,28 +44,28 @@ macOS 应用已进行完整 ad-hoc 签名，避免因 Electron 临时签名不�
 
 ```bash
 curl -X POST http://127.0.0.1:17888/api/generate \
-  -H "Authorization: Bearer local-doubao-key" \
-  -F "model=seedance_2_0_mini" \
+  -H "Authorization: Bearer local-dola-key" \
+  -F "model=seedance_2_0" \
   -F "prompt=生成一段 10 秒科普视频" \
   -F "referenceImage=@/path/to/reference.png" \
-  -F "callbackUrl=http://127.0.0.1:3000/doubao/callback"
+  -F "callbackUrl=http://127.0.0.1:3000/dola/callback"
 ```
 
 提交成功会先返回 `accepted`，可通过下面的接口查询：
 
 ```bash
-curl http://127.0.0.1:17888/api/requests/doubao-xxxxxxxxxxxxxxxx \
-  -H "Authorization: Bearer local-doubao-key"
+curl http://127.0.0.1:17888/api/requests/dola-xxxxxxxxxxxxxxxx \
+  -H "Authorization: Bearer local-dola-key"
 ```
 
 成功结果只包含最终可用的视频字段：
 
 ```json
 {
-  "requestId": "doubao-xxxxxxxxxxxxxxxx",
+  "requestId": "dola-xxxxxxxxxxxxxxxx",
   "status": "success",
   "message": "视频生成完成，去水印 MP4 地址已验证（耗时 X 秒，第 N 次解析）",
-  "model": "seedance_2_0_mini",
+  "model": "seedance_2_0",
   "cleanVideoUrl": "https://example.com/video.mp4",
   "outputVideoPath": null
 }
@@ -77,8 +79,8 @@ curl http://127.0.0.1:17888/api/requests/doubao-xxxxxxxxxxxxxxxx \
 
 运行数据不会提交到仓库：
 
-- macOS：`~/Library/Application Support/doubao-account-manager/`
-- Windows：`%APPDATA%/doubao-account-manager/`
+- macOS：`~/Library/Application Support/dola-account-manager/`
+- Windows：`%APPDATA%/dola-account-manager/`
 
 SQLite 数据库、账号 partition、Cookie、缓存、上传参考图和登录状态均保存在对应系统用户目录。
 
@@ -111,9 +113,9 @@ npm run dist:win   # Windows x64 安装包
 
 ## 使用边界
 
-本项目不提供自动注册、验证码处理、账号限制绕过或平台风控规避。请遵守豆包及相关第三方服务的使用规则，仅在本人拥有权限的账号和内容上使用。
+本项目不提供自动注册、验证码处理、账号限制绕过或平台风控规避。请遵守Dola及相关第三方服务的使用规则，仅在本人拥有权限的账号和内容上使用。
 
-本项目是非官方本地工具，与豆包或字节跳动不存在隶属、授权或合作关系。
+本项目是非官方本地工具，与Dola或字节跳动不存在隶属、授权或合作关系。
 
 ## 更新记录
 

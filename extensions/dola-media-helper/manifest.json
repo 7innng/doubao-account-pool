@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "Dola 媒体助手",
+  "version": "1.2.0",
+  "description": "仅作用于 Dola，提供视频时长选项与媒体资源下载面板。",
+  "host_permissions": [
+    "*://*.dola.com/*",
+    "*://*.byteintlapi.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.dola.com/*"
+      ],
+      "js": [
+        "duration-main.js",
+        "dola-media-main.js"
+      ],
+      "run_at": "document_idle",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "*://*.dola.com/*"
+      ],
+      "js": [
+        "content-panel.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

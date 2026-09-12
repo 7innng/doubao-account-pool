@@ -42,7 +42,7 @@ export function getWatermarkRetryDelays(
   return WATERMARK_RETRY_DELAYS_MS.slice(0, attemptCount);
 }
 
-export function hasDoubaoShareVideoResource(html: string) {
+export function hasDolaShareVideoResource(html: string) {
   if (!html.trim()) return false;
 
   const normalized = html
@@ -56,7 +56,7 @@ export function hasDoubaoShareVideoResource(html: string) {
   return hasCompletion && hasVideoBlock && hasMp4;
 }
 
-export async function verifyDoubaoShareVideoResource(shareUrl: string) {
+export async function verifyDolaShareVideoResource(shareUrl: string) {
   let response: Response;
   try {
     response = await fetch(shareUrl, {
@@ -65,17 +65,17 @@ export async function verifyDoubaoShareVideoResource(shareUrl: string) {
       signal: AbortSignal.timeout(SHARE_PAGE_TIMEOUT_MS)
     });
   } catch (error) {
-    throw new Error(`复制出的豆包分享页无法访问：${errorMessage(error)}`);
+    throw new Error(`复制出的Dola分享页无法访问：${errorMessage(error)}`);
   }
 
   if (!response.ok) {
     await response.body?.cancel().catch(() => undefined);
-    throw new Error(`复制出的豆包分享页无法访问：HTTP ${response.status}`);
+    throw new Error(`复制出的Dola分享页无法访问：HTTP ${response.status}`);
   }
 
   const html = await response.text();
-  if (!hasDoubaoShareVideoResource(html)) {
-    throw new Error("复制出的豆包分享页没有包含当前视频资源");
+  if (!hasDolaShareVideoResource(html)) {
+    throw new Error("复制出的Dola分享页没有包含当前视频资源");
   }
 }
 

@@ -169,6 +169,11 @@ button {
   background: var(--primary-hover);
 }
 
+.button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
 .button.subtle {
   background: #f8fafc;
 }
@@ -396,6 +401,174 @@ textarea:focus {
 
 .settings-grid .panel {
   margin: 0;
+}
+
+.api-test-grid {
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 0.85fr);
+}
+
+.api-test-api-state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  background: #fef2f2;
+  color: var(--danger);
+  padding: 10px 12px;
+}
+
+.api-test-api-state.running {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: var(--success);
+}
+
+.api-test-api-state.running .status-dot {
+  background: #16a163;
+}
+
+.api-test-api-state code {
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  color: #475467;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.api-test-capacity {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  border: 1px solid #dbe5f1;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 10px 12px;
+}
+
+.api-test-capacity > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.api-test-capacity span,
+.api-test-capacity p {
+  color: #687385;
+  font-size: 12px;
+}
+
+.api-test-capacity strong {
+  font-size: 18px;
+}
+
+.api-test-capacity p {
+  grid-column: 1 / -1;
+  margin: 2px 0 0;
+}
+
+.api-test-capacity.unavailable {
+  border-color: #fed7aa;
+  background: #fff7ed;
+}
+
+.api-test-form textarea {
+  min-height: 164px;
+  resize: vertical;
+  line-height: 1.55;
+}
+
+.duration-guard-note {
+  margin: -2px 0 0;
+  border: 1px solid #c7d7fe;
+  border-radius: 8px;
+  background: #eff6ff;
+  color: #1e40af;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.api-test-error {
+  margin: 0;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  background: #fef2f2;
+  color: var(--danger);
+  padding: 10px 12px;
+}
+
+.api-test-window-option {
+  justify-self: start;
+  border: 1px solid #dbe5f1;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 10px 12px;
+}
+
+.api-test-result-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.api-test-result-panel .section-title {
+  margin-bottom: 0;
+}
+
+.api-test-result-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.polling-label {
+  color: var(--primary);
+  font-size: 12px;
+}
+
+.api-test-message {
+  margin: 0;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #475467;
+  padding: 10px 12px;
+  line-height: 1.5;
+}
+
+.api-test-video-result {
+  display: grid;
+  gap: 8px;
+  border: 1px solid #bbf7d0;
+  border-radius: 8px;
+  background: #f0fdf4;
+  padding: 12px;
+}
+
+.api-test-video-result code {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.api-test-video-result .button {
+  justify-self: start;
+  text-decoration: none;
+}
+
+.api-test-result-panel pre {
+  max-height: 420px;
+  margin: 0;
+}
+
+.api-test-empty {
+  margin: 0;
+  border: 1px dashed #d4dae3;
+  border-radius: 8px;
+  padding: 42px 24px;
+  line-height: 1.6;
 }
 
 .settings-form {

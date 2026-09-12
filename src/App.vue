@@ -7,13 +7,26 @@ import type {
   ApiRequestStatus,
   ApiServerStatus,
   AppSettings,
-  DoubaoModel,
+  DolaModel,
   LoginStatus,
   OperationLog,
   OperationLogStatus
 } from "../electron/types";
 
-type TabKey = "accounts" | "settings" | "logs" | "actions";
+type TabKey = "accounts" | "api-test" | "settings" | "logs" | "actions";
+
+interface ApiTestResponse {
+  requestId?: string;
+  status?: ApiRequestStatus;
+  message?: string;
+  model?: DolaModel;
+  cleanVideoUrl?: string | null;
+  outputVideoPath?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+  finishedAt?: string | null;
+  error?: string;
+}
 
 const accounts = ref<Account[]>([]);
 const apiRequests = ref<ApiRequest[]>([]);
@@ -40,6 +53,20 @@ const logStatusFilter = ref<"all" | ApiRequestStatus>("all");
 const operationSearch = ref("");
 const operationStatusFilter = ref<"all" | OperationLogStatus>("all");
 const copiedField = ref<"prompt" | "result" | null>(null);
+const apiTestSubmitting = ref(false);
+const apiTestPolling = ref(false);
+const apiTestError = ref("");
+const apiTestResult = ref<ApiTestResponse | null>(null);
+const apiTestResultCopied = ref(false);
+
+const apiTestForm = reactive({
+  model: "seedance_2_5" as DolaModel,
+  prompt: "",
+  referenceImagePath: "",
+  referenceImageUrl: "",
+  callbackUrl: "",
+  showBrowserWindow: true
+});
 
 const accountSettingsForm = reactive({
   remark: "",
@@ -50,15 +77,15 @@ const accountSettingsForm = reactive({
 const settingsForm = reactive<AppSettings>({
   apiServiceEnabled: true,
   apiPort: 17888,
-  apiKey: "local-doubao-key",
+  apiKey: "local-dola-key",
   executorEnabled: true,
   showExecutorWindow: false,
   autoCloseExecutorWindow: true,
-  doubaoChatUrl: "https://www.doubao.com/chat",
-  defaultModel: "seedance_2_0_mini",
+  dolaChatUrl: "https://www.dola.com/chat",
+  defaultModel: "seedance_2_0",
   dailyQuotaLimit: 10,
-  miniCost: 2,
-  fastCost: 3,
+  seedance20Cost: 2,
+  seedance25Cost: 3,
   dailyResetTime: "00:00",
   generationTimeoutSeconds: 900,
   maxConcurrentAccounts: 4,
@@ -90,9 +117,9 @@ const requestLabels: Record<ApiRequestStatus, string> = {
   stopped: "已停止"
 };
 
-const modelLabels: Record<DoubaoModel, string> = {
-  seedance_2_0_mini: "Seedance 2.0 Mini",
-  seedance_2_0_fast: "Seedance 2.0 Fast"
+const modelLabels: Record<DolaModel, string> = {
+  seedance_2_0: "Seedance 2.0",
+  seedance_2_5: "Seedance 2.5（扩展支持 30 秒）"
 };
 
 const modalRemainingQuota = computed(() =>
@@ -152,16 +179,30 @@ const accountQuotaSummary = computed(() => {
     remaining,
     used,
     usedPercent: total > 0 ? Math.min(100, (used / total) * 100) : 0,
-    miniRuns: accounts.value.reduce(
-      (sum, account) => sum + remainingGenerations(account, "seedance_2_0_mini"),
+    seedance20Runs: accounts.value.reduce(
+      (sum, account) => sum + remainingGenerations(account, "seedance_2_0"),
       0
     ),
-    fastRuns: accounts.value.reduce(
-      (sum, account) => sum + remainingGenerations(account, "seedance_2_0_fast"),
+    seedance25Runs: accounts.value.reduce(
+      (sum, account) => sum + remainingGenerations(account, "seedance_2_5"),
       0
     )
   };
 });
+
+const apiTestModelCost = computed(() =>
+  apiTestForm.model === "seedance_2_0"
+    ? Math.max(1, Number(settingsForm.seedance20Cost) || 1)
+    : Math.max(1, Number(settingsForm.seedance25Cost) || 1)
+);
+
+const apiTestEligibleAccounts = computed(() =>
+  accounts.value.filter((account) =>
+    account.loginStatus === "logged_in"
+    && account.currentStatus === "idle"
+    && account.quotaRemaining >= apiTestModelCost.value
+  )
+);
 
 const filteredAccounts = computed(() => {
   const keyword = accountSearch.value.trim().toLocaleLowerCase("zh-CN");
@@ -184,42 +225,162 @@ const filteredAccounts = computed(() => {
 
 const apiExample = computed(() => {
   const port = settingsForm.apiPort || 17888;
-  const token = settingsForm.apiKey || "local-doubao-key";
-  return `# 共享额度：账号每日 ${settingsForm.dailyQuotaLimit}，Mini 每次扣 ${settingsForm.miniCost}，Fast 每次扣 ${settingsForm.fastCost}
+  const token = settingsForm.apiKey || "local-dola-key";
+  return `# 共享额度：账号每日 ${settingsForm.dailyQuotaLimit}，Seedance 2.0 每次扣 ${settingsForm.seedance20Cost}，Seedance 2.5 每次扣 ${settingsForm.seedance25Cost}
 curl -X POST http://127.0.0.1:${port}/api/generate \\
   -H "Authorization: Bearer ${token}" \\
-  -F "model=seedance_2_0_mini" \\
+  -F "model=seedance_2_0" \\
   -F "prompt=生成一段 10 秒女性科普动画" \\
   -F "referenceImage=@/Users/your-name/Pictures/ref.png" \\
   -F "removeWatermark=true" \\
-  -F "callbackUrl=http://127.0.0.1:3000/doubao/callback"`;
+  -F "callbackUrl=http://127.0.0.1:3000/dola/callback"`;
 });
 
 const watermarkExample = computed(() => {
   const port = settingsForm.apiPort || 17888;
-  const token = settingsForm.apiKey || "local-doubao-key";
+  const token = settingsForm.apiKey || "local-dola-key";
   return `curl -X POST http://127.0.0.1:${port}/api/watermark/parse \\
   -H "Authorization: Bearer ${token}" \\
   -H "Content-Type: application/json" \\
-  -d '{"url":"https://www.doubao.com/thread/xxx"}'`;
+  -d '{"url":"https://www.dola.com/thread/xxx"}'`;
 });
 
 let removeDataChangedListener: (() => void) | null = null;
 let refreshTimer: number | null = null;
 let statusCheckTimer: number | null = null;
+let apiTestPollTimer: number | null = null;
 let refreshInFlight = false;
 let statusCheckInFlight = false;
+
+function localApiBaseUrl() {
+  return apiStatus.value.url || `http://127.0.0.1:${Number(settingsForm.apiPort) || 17888}`;
+}
+
+function apiTestHeaders() {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const token = settingsForm.apiKey.trim();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return headers;
+}
+
+async function readApiResponse(response: Response) {
+  const text = await response.text();
+  if (!text.trim()) return {} as ApiTestResponse;
+  try {
+    return JSON.parse(text) as ApiTestResponse;
+  } catch {
+    throw new Error(`接口返回的不是 JSON：${text.slice(0, 180)}`);
+  }
+}
+
+function stopApiTestPolling() {
+  apiTestPolling.value = false;
+  if (apiTestPollTimer !== null) {
+    window.clearTimeout(apiTestPollTimer);
+    apiTestPollTimer = null;
+  }
+}
+
+async function pollApiTestRequest(requestId: string) {
+  stopApiTestPolling();
+  apiTestPolling.value = true;
+  try {
+    const response = await fetch(`${localApiBaseUrl()}/api/requests/${encodeURIComponent(requestId)}`, {
+      headers: apiTestHeaders()
+    });
+    const payload = await readApiResponse(response);
+    apiTestResult.value = payload;
+    if (!response.ok) {
+      throw new Error(payload.error || payload.message || `查询失败：HTTP ${response.status}`);
+    }
+    if (payload.status === "success" || payload.status === "failed" || payload.status === "stopped") {
+      stopApiTestPolling();
+      await refresh();
+      return;
+    }
+    apiTestPollTimer = window.setTimeout(() => {
+      void pollApiTestRequest(requestId).catch((error) => {
+        stopApiTestPolling();
+        apiTestError.value = error instanceof Error ? error.message : "查询任务失败";
+      });
+    }, 2000);
+  } catch (error) {
+    stopApiTestPolling();
+    throw error;
+  }
+}
+
+async function submitApiTest() {
+  const prompt = apiTestForm.prompt.trim();
+  if (!prompt) {
+    apiTestError.value = "请先填写视频提示词";
+    return;
+  }
+  if (!apiStatus.value.running) {
+    apiTestError.value = "本地 API 尚未运行，请先在配置管理中开启或重启 API";
+    return;
+  }
+  if (apiTestEligibleAccounts.value.length === 0) {
+    apiTestError.value = `当前没有空闲且剩余额度不少于 ${apiTestModelCost.value} 的已登录账号`;
+    return;
+  }
+
+  stopApiTestPolling();
+  apiTestSubmitting.value = true;
+  apiTestError.value = "";
+  apiTestResult.value = null;
+  try {
+    if (settingsForm.showExecutorWindow !== apiTestForm.showBrowserWindow) {
+      await window.dolaManager.settings.update({ showExecutorWindow: apiTestForm.showBrowserWindow });
+      settingsForm.showExecutorWindow = apiTestForm.showBrowserWindow;
+    }
+    const response = await fetch(`${localApiBaseUrl()}/api/generate`, {
+      method: "POST",
+      headers: apiTestHeaders(),
+      body: JSON.stringify({
+        model: apiTestForm.model,
+        prompt,
+        referenceImagePath: apiTestForm.referenceImagePath.trim() || null,
+        referenceImageUrl: apiTestForm.referenceImageUrl.trim() || null,
+        callbackUrl: apiTestForm.callbackUrl.trim() || null,
+        removeWatermark: true,
+        source: "embedded-api-tester"
+      })
+    });
+    const payload = await readApiResponse(response);
+    apiTestResult.value = payload;
+    if (!response.ok) {
+      throw new Error(payload.error || payload.message || `提交失败：HTTP ${response.status}`);
+    }
+    if (!payload.requestId) throw new Error("接口已响应，但没有返回 requestId");
+    await refresh();
+    await pollApiTestRequest(payload.requestId);
+  } catch (error) {
+    apiTestError.value = error instanceof Error ? error.message : "提交接口请求失败";
+  } finally {
+    apiTestSubmitting.value = false;
+  }
+}
+
+async function copyApiTestResult() {
+  if (!apiTestResult.value) return;
+  await navigator.clipboard.writeText(JSON.stringify(apiTestResult.value, null, 2));
+  apiTestResultCopied.value = true;
+  window.setTimeout(() => {
+    apiTestResultCopied.value = false;
+  }, 1500);
+}
 
 async function refresh() {
   if (refreshInFlight) return;
   refreshInFlight = true;
   try {
   const [accountRows, settings, status, requests, actions] = await Promise.all([
-    window.doubaoManager.accounts.list(),
-    window.doubaoManager.settings.get(),
-    window.doubaoManager.apiServer.status(),
-    window.doubaoManager.apiRequests.list(100),
-    window.doubaoManager.operationLogs.list(500)
+    window.dolaManager.accounts.list(),
+    window.dolaManager.settings.get(),
+    window.dolaManager.apiServer.status(),
+    window.dolaManager.apiRequests.list(100),
+    window.dolaManager.operationLogs.list(500)
   ]);
   accounts.value = accountRows;
   apiRequests.value = requests;
@@ -235,7 +396,7 @@ async function autoCheckAccountStatuses() {
   if (statusCheckInFlight) return;
   statusCheckInFlight = true;
   try {
-    await window.doubaoManager.accounts.detectAll();
+    await window.dolaManager.accounts.detectAll();
     await refresh();
   } finally {
     statusCheckInFlight = false;
@@ -243,46 +404,46 @@ async function autoCheckAccountStatuses() {
 }
 
 async function addAccountAndOpen() {
-  const account = await window.doubaoManager.accounts.create();
-  await window.doubaoManager.accounts.open(account.id);
+  const account = await window.dolaManager.accounts.create();
+  await window.dolaManager.accounts.open(account.id);
   await refresh();
 }
 
 async function openAccount(account: Account) {
-  await window.doubaoManager.accounts.open(account.id);
+  await window.dolaManager.accounts.open(account.id);
   await refresh();
 }
 
 async function detectAccount(account: Account) {
-  await window.doubaoManager.accounts.detectLogin(account.id);
+  await window.dolaManager.accounts.detectLogin(account.id);
   await refresh();
 }
 
 async function detectAll() {
-  await window.doubaoManager.accounts.detectAll();
+  await window.dolaManager.accounts.detectAll();
   await refresh();
 }
 
 async function relogin(account: Account) {
-  if (!window.confirm(`清空 ${account.partition} 的登录状态并重新打开豆包？`)) return;
-  await window.doubaoManager.accounts.relogin(account.id);
+  if (!window.confirm(`清空 ${account.partition} 的登录状态并重新打开Dola？`)) return;
+  await window.dolaManager.accounts.relogin(account.id);
   await refresh();
 }
 
 async function deleteAccount(account: Account) {
   if (!window.confirm(`删除 ${account.partition} 并清空对应浏览器数据？`)) return;
-  await window.doubaoManager.accounts.delete(account.id);
+  await window.dolaManager.accounts.delete(account.id);
   await refresh();
 }
 
 async function resetQuota(account: Account) {
-  await window.doubaoManager.accounts.resetQuota(account.id);
+  await window.dolaManager.accounts.resetQuota(account.id);
   await refresh();
 }
 
 async function resetAllQuotas() {
   if (!window.confirm("重置所有账号今日额度？")) return;
-  await window.doubaoManager.accounts.resetAllQuotas();
+  await window.dolaManager.accounts.resetAllQuotas();
   await refresh();
 }
 
@@ -301,7 +462,7 @@ async function saveAccountSettings() {
   if (!editingAccount.value) return;
   const total = Math.max(0, Math.floor(Number(accountSettingsForm.dailyQuotaLimit) || 0));
   const used = Math.min(total, Math.max(0, Math.floor(Number(accountSettingsForm.quotaUsedToday) || 0)));
-  await window.doubaoManager.accounts.update({
+  await window.dolaManager.accounts.update({
     id: editingAccount.value.id,
     remark: accountSettingsForm.remark.trim(),
     dailyQuotaLimit: total,
@@ -313,12 +474,12 @@ async function saveAccountSettings() {
 }
 
 async function saveSettings() {
-  await window.doubaoManager.settings.update({
+  await window.dolaManager.settings.update({
     ...settingsForm,
     apiPort: Number(settingsForm.apiPort),
     dailyQuotaLimit: Number(settingsForm.dailyQuotaLimit),
-    miniCost: Number(settingsForm.miniCost),
-    fastCost: Number(settingsForm.fastCost),
+    seedance20Cost: Number(settingsForm.seedance20Cost),
+    seedance25Cost: Number(settingsForm.seedance25Cost),
     generationTimeoutSeconds: Number(settingsForm.generationTimeoutSeconds),
     maxConcurrentAccounts: Number(settingsForm.maxConcurrentAccounts),
     retryCount: Number(settingsForm.retryCount)
@@ -327,18 +488,18 @@ async function saveSettings() {
 }
 
 async function restartApiServer() {
-  apiStatus.value = await window.doubaoManager.apiServer.restart();
+  apiStatus.value = await window.dolaManager.apiServer.restart();
 }
 
 async function clearLogs() {
   if (!window.confirm("清空接口日志？")) return;
-  await window.doubaoManager.apiRequests.clear();
+  await window.dolaManager.apiRequests.clear();
   await refresh();
 }
 
 async function clearOperationLogs() {
   if (!window.confirm("清空全部行动日志？三天前的日志会自动清理。")) return;
-  await window.doubaoManager.operationLogs.clear();
+  await window.dolaManager.operationLogs.clear();
   await refresh();
 }
 
@@ -403,7 +564,7 @@ function sourceLabel(value: string) {
 }
 
 function requestAccountLabel(item: ApiRequest) {
-  const suffix = item.accountPartition?.match(/doubao_account_(\d+)$/)?.[1];
+  const suffix = item.accountPartition?.match(/dola_account_(\d+)$/)?.[1];
   if (suffix) return `账号 ${suffix}`;
   return item.accountName || item.accountPartition || "等待分配";
 }
@@ -433,12 +594,12 @@ async function copyOperationUrl(value: string) {
 }
 
 function accountCode(account: Account) {
-  const suffix = account.partition.match(/doubao_account_(\d+)$/)?.[1] || String(account.id).padStart(3, "0");
+  const suffix = account.partition.match(/dola_account_(\d+)$/)?.[1] || String(account.id).padStart(3, "0");
   return `账号 ${suffix}`;
 }
 
 function minimumQuotaCost() {
-  return Math.min(Number(settingsForm.miniCost) || 2, Number(settingsForm.fastCost) || 3);
+  return Math.min(Number(settingsForm.seedance20Cost) || 2, Number(settingsForm.seedance25Cost) || 3);
 }
 
 function isQuotaExhausted(account: Account) {
@@ -473,8 +634,8 @@ function quotaUsedPercent(account: Account) {
   return Math.min(100, Math.max(0, (account.quotaUsedToday / account.dailyQuotaLimit) * 100));
 }
 
-function remainingGenerations(account: Account, model: DoubaoModel) {
-  const cost = model === "seedance_2_0_mini" ? Number(settingsForm.miniCost) : Number(settingsForm.fastCost);
+function remainingGenerations(account: Account, model: DolaModel) {
+  const cost = model === "seedance_2_0" ? Number(settingsForm.seedance20Cost) : Number(settingsForm.seedance25Cost);
   return Math.floor(account.quotaRemaining / Math.max(1, cost || 1));
 }
 
@@ -508,7 +669,7 @@ async function copyApiAddress() {
 
 onMounted(async () => {
   window.addEventListener("click", closeMenus);
-  removeDataChangedListener = window.doubaoManager.events.onDataChanged(() => {
+  removeDataChangedListener = window.dolaManager.events.onDataChanged(() => {
     void refresh();
   });
   try {
@@ -532,6 +693,7 @@ onBeforeUnmount(() => {
   removeDataChangedListener?.();
   if (refreshTimer !== null) window.clearInterval(refreshTimer);
   if (statusCheckTimer !== null) window.clearInterval(statusCheckTimer);
+  stopApiTestPolling();
 });
 </script>
 
@@ -539,8 +701,8 @@ onBeforeUnmount(() => {
   <main class="app-shell">
     <header class="topbar">
       <div class="brand">
-        <h1>豆包账号池</h1>
-        <p>多账号隔离登录，共享每日额度；Mini/Fast 按不同消耗对外提供本地接口。</p>
+        <h1>Dola账号池</h1>
+        <p>仅连接 dola.com，多账号隔离登录，并内置 Dola 媒体扩展。</p>
       </div>
       <div class="api-status-compact" :class="{ running: apiStatus.running, error: !apiStatus.running }">
         <span class="status-dot" aria-hidden="true"></span>
@@ -555,6 +717,7 @@ onBeforeUnmount(() => {
 
     <nav class="tabs">
       <button :class="{ active: activeTab === 'accounts' }" @click="activeTab = 'accounts'">账号池</button>
+      <button :class="{ active: activeTab === 'api-test' }" @click="activeTab = 'api-test'">API 调试</button>
       <button :class="{ active: activeTab === 'settings' }" @click="activeTab = 'settings'">配置管理</button>
       <button :class="{ active: activeTab === 'logs' }" @click="activeTab = 'logs'">接口日志</button>
       <button :class="{ active: activeTab === 'actions' }" @click="activeTab = 'actions'">行动日志</button>
@@ -601,13 +764,13 @@ onBeforeUnmount(() => {
             <span :style="{ width: `${accountQuotaSummary.usedPercent}%` }"></span>
           </div>
         </div>
-        <div role="listitem" title="全部剩余额度只用于 Mini 时的预计次数">
-          <span>Mini 预计</span>
-          <strong>{{ accountQuotaSummary.miniRuns }} 次</strong>
+        <div role="listitem" title="全部剩余额度只用于 Seedance 2.0 时的预计次数">
+          <span>2.0 预计</span>
+          <strong>{{ accountQuotaSummary.seedance20Runs }} 次</strong>
         </div>
-        <div role="listitem" title="全部剩余额度只用于 Fast 时的预计次数；与 Mini 预计次数不可相加">
-          <span>Fast 预计</span>
-          <strong>{{ accountQuotaSummary.fastRuns }} 次</strong>
+        <div role="listitem" title="全部剩余额度只用于 Seedance 2.5 时的预计次数；与 2.0 预计次数不可相加">
+          <span>2.5 预计</span>
+          <strong>{{ accountQuotaSummary.seedance25Runs }} 次</strong>
         </div>
       </div>
 
@@ -684,14 +847,14 @@ onBeforeUnmount(() => {
                   <span :style="{ width: `${quotaUsedPercent(account)}%` }"></span>
                 </div>
                 <div class="quota-models">
-                  <span>Mini 可生成 {{ remainingGenerations(account, 'seedance_2_0_mini') }} 次</span>
-                  <span>Fast 可生成 {{ remainingGenerations(account, 'seedance_2_0_fast') }} 次</span>
+                  <span>2.0 可生成 {{ remainingGenerations(account, 'seedance_2_0') }} 次</span>
+                  <span>2.5 可生成 {{ remainingGenerations(account, 'seedance_2_5') }} 次</span>
                 </div>
               </td>
               <td class="last-used-cell" :title="fullTime(account.lastUsedAt)">{{ formatRelativeTime(account.lastUsedAt) }}</td>
               <td class="account-actions-cell">
                 <div class="row-actions account-actions">
-                  <button class="button primary compact-button" @click="openAccount(account)">打开豆包</button>
+                  <button class="button primary compact-button" @click="openAccount(account)">打开Dola</button>
                   <button class="button compact-button" @click="detectAccount(account)">检测</button>
                   <div class="action-menu">
                     <button class="more-button" type="button" aria-label="更多账号操作" @click.stop="toggleAccountMenu(account.id)">···</button>
@@ -711,6 +874,119 @@ onBeforeUnmount(() => {
         <div v-if="!accounts.length" class="empty compact">还没有账号。点击“添加账号”开始。</div>
         <div v-else-if="!filteredAccounts.length" class="empty compact">没有符合当前条件的账号。</div>
       </div>
+    </section>
+
+    <section v-else-if="activeTab === 'api-test'" class="settings-grid api-test-grid">
+      <form class="panel settings-form api-test-form" @submit.prevent="submitApiTest">
+        <div class="section-title">
+          <div>
+            <h2>API 调试</h2>
+            <p>直接调用当前软件的本地接口，并自动轮询到视频生成完成。</p>
+          </div>
+          <button class="button primary" type="submit" :disabled="apiTestSubmitting || apiTestPolling">
+            {{ apiTestSubmitting ? "正在提交…" : apiTestPolling ? "生成进行中…" : "提交生成" }}
+          </button>
+        </div>
+
+        <div class="api-test-api-state" :class="{ running: apiStatus.running }">
+          <span class="status-dot" aria-hidden="true"></span>
+          <strong>{{ apiStatus.running ? "接口可用" : "接口未运行" }}</strong>
+          <code>{{ localApiBaseUrl() }}/api/generate</code>
+        </div>
+
+        <div class="api-test-capacity" :class="{ unavailable: apiTestEligibleAccounts.length === 0 }">
+          <div>
+            <span>本次本地额度消耗</span>
+            <strong>{{ apiTestModelCost }}</strong>
+          </div>
+          <div>
+            <span>当前可执行账号</span>
+            <strong>{{ apiTestEligibleAccounts.length }}</strong>
+          </div>
+          <p v-if="apiTestEligibleAccounts.length === 0">账号可能正在执行任务、尚未登录，或剩余额度不足。</p>
+        </div>
+
+        <div class="form-section wide">
+          <label>
+            <span>模型</span>
+            <select v-model="apiTestForm.model">
+              <option value="seedance_2_0">{{ modelLabels.seedance_2_0 }}</option>
+              <option value="seedance_2_5">{{ modelLabels.seedance_2_5 }}</option>
+            </select>
+          </label>
+          <p v-if="apiTestForm.model === 'seedance_2_5'" class="duration-guard-note">
+            提交前会强制校验：视频生成、Seedance 2.5、30s、扩展开启。任何一项不符合都不会发送。
+          </p>
+          <label>
+            <span>视频提示词 *</span>
+            <textarea v-model="apiTestForm.prompt" rows="8" placeholder="描述你想生成的 30 秒视频…"></textarea>
+          </label>
+        </div>
+
+        <div class="form-section">
+          <h3>参考图（可选）</h3>
+          <p class="form-hint">本地路径优先；也可以填写可公开访问的图片 URL。</p>
+          <label>
+            <span>本地图片绝对路径</span>
+            <input v-model="apiTestForm.referenceImagePath" placeholder="/Users/your-name/Pictures/ref.png" />
+          </label>
+          <label>
+            <span>图片 URL</span>
+            <input v-model="apiTestForm.referenceImageUrl" type="url" placeholder="https://example.com/ref.png" />
+          </label>
+        </div>
+
+        <div class="form-section wide">
+          <h3>回调（可选）</h3>
+          <label>
+            <span>Callback URL</span>
+            <input v-model="apiTestForm.callbackUrl" type="url" placeholder="http://127.0.0.1:3000/dola/callback" />
+          </label>
+        </div>
+
+        <label class="checkbox-line api-test-window-option">
+          <input v-model="apiTestForm.showBrowserWindow" type="checkbox" />
+          提交 API 时显示 Dola 浏览器执行窗口
+        </label>
+
+        <p v-if="apiTestError" class="api-test-error">{{ apiTestError }}</p>
+      </form>
+
+      <aside class="panel api-test-result-panel">
+        <div class="section-title">
+          <div>
+            <h2>调用结果</h2>
+            <p>请求状态每 2 秒自动刷新。</p>
+          </div>
+          <button v-if="apiTestResult" class="button" type="button" @click="copyApiTestResult">
+            {{ apiTestResultCopied ? "已复制" : "复制 JSON" }}
+          </button>
+        </div>
+
+        <div v-if="apiTestResult" class="api-test-result-summary">
+          <span v-if="apiTestResult.status" class="pill" :class="`request-${apiTestResult.status}`">
+            {{ requestLabels[apiTestResult.status] }}
+          </span>
+          <code v-if="apiTestResult.requestId">{{ apiTestResult.requestId }}</code>
+          <span v-if="apiTestPolling" class="polling-label">自动查询中</span>
+        </div>
+        <p v-if="apiTestResult?.message" class="api-test-message">{{ apiTestResult.message }}</p>
+
+        <div v-if="apiTestResult?.outputVideoPath || apiTestResult?.cleanVideoUrl" class="api-test-video-result">
+          <strong>最终视频</strong>
+          <code>{{ apiTestResult.outputVideoPath || apiTestResult.cleanVideoUrl }}</code>
+          <a
+            v-if="apiTestResult.cleanVideoUrl"
+            class="button primary"
+            :href="apiTestResult.cleanVideoUrl"
+            target="_blank"
+            rel="noreferrer"
+          >打开视频</a>
+        </div>
+
+        <pre v-if="apiTestResult">{{ JSON.stringify(apiTestResult, null, 2) }}</pre>
+        <div v-else class="empty api-test-empty">提交一次测试请求后，这里会显示 requestId、执行状态和最终视频地址。</div>
+      </aside>
     </section>
 
     <section v-else-if="activeTab === 'settings'" class="settings-grid">
@@ -744,12 +1020,12 @@ onBeforeUnmount(() => {
 
         <div class="form-section">
           <h3>模型额度</h3>
-          <p class="form-hint">豆包账号每天只有一条共享额度，默认总额 10；Mini 消耗 2，Fast 消耗 3。</p>
+          <p class="form-hint">Dola 账号共用本地额度账本；Seedance 2.0 与 2.5 可分别配置消耗。</p>
           <label>
             <span>默认模型</span>
             <select v-model="settingsForm.defaultModel">
-              <option value="seedance_2_0_mini">{{ modelLabels.seedance_2_0_mini }}</option>
-              <option value="seedance_2_0_fast">{{ modelLabels.seedance_2_0_fast }}</option>
+              <option value="seedance_2_0">{{ modelLabels.seedance_2_0 }}</option>
+              <option value="seedance_2_5">{{ modelLabels.seedance_2_5 }}</option>
             </select>
           </label>
           <label>
@@ -757,12 +1033,12 @@ onBeforeUnmount(() => {
             <input v-model.number="settingsForm.dailyQuotaLimit" type="number" min="0" />
           </label>
           <label>
-            <span>Mini 单次消耗</span>
-            <input v-model.number="settingsForm.miniCost" type="number" min="1" />
+            <span>Seedance 2.0 单次消耗</span>
+            <input v-model.number="settingsForm.seedance20Cost" type="number" min="1" />
           </label>
           <label>
-            <span>Fast 单次消耗</span>
-            <input v-model.number="settingsForm.fastCost" type="number" min="1" />
+            <span>Seedance 2.5 单次消耗</span>
+            <input v-model.number="settingsForm.seedance25Cost" type="number" min="1" />
           </label>
           <label>
             <span>每日重置时间</span>
@@ -778,15 +1054,15 @@ onBeforeUnmount(() => {
           </label>
           <label class="checkbox-line">
             <input v-model="settingsForm.showExecutorWindow" type="checkbox" />
-            调试时显示豆包执行窗口
+            调试时显示Dola执行窗口
           </label>
           <label class="checkbox-line">
             <input v-model="settingsForm.autoCloseExecutorWindow" type="checkbox" />
             完成后自动关闭执行窗口
           </label>
           <label>
-            <span>豆包入口地址</span>
-            <input v-model="settingsForm.doubaoChatUrl" />
+            <span>Dola入口地址</span>
+            <input v-model="settingsForm.dolaChatUrl" />
           </label>
           <label>
             <span>生成超时秒数</span>
@@ -818,7 +1094,7 @@ onBeforeUnmount(() => {
           </label>
           <label>
             <span>输出目录</span>
-            <input v-model="settingsForm.outputDir" placeholder="/Users/your-name/Movies/doubao-output" />
+            <input v-model="settingsForm.outputDir" placeholder="/Users/your-name/Movies/dola-output" />
           </label>
         </div>
       </form>
@@ -1094,7 +1370,7 @@ onBeforeUnmount(() => {
         </div>
 
         <div class="quota-note">
-          Mini 每次消耗 {{ settingsForm.miniCost }} 额度；Fast 每次消耗 {{ settingsForm.fastCost }} 额度。账号池首页只读显示，避免误改。
+          Seedance 2.0 每次消耗 {{ settingsForm.seedance20Cost }} 额度；Seedance 2.5 每次消耗 {{ settingsForm.seedance25Cost }} 额度。账号池首页只读显示，避免误改。
         </div>
 
         <div class="modal-actions">

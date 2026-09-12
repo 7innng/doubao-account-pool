@@ -2,18 +2,18 @@ export function normalizeComparableText(value: string) {
   return value.replace(/[^\p{L}\p{N}]+/gu, "").trim();
 }
 
-const DOUBAO_SHARE_URL_RE = /https?:\/\/(?:www\.)?doubao\.com\/(?:thread|chat|share)\/[A-Za-z0-9._~-]+(?:[\/?#][^\s"'<>]*)?/i;
-const DOUBAO_CONVERSATION_URL_RE = /https?:\/\/(?:www\.)?doubao\.com\/chat\/[A-Za-z0-9._~-]+(?:[\/?#][^\s"'<>]*)?/i;
+const DOLA_SHARE_URL_RE = /https?:\/\/(?:www\.)?dola\.com\/(?:thread|chat|share)\/[A-Za-z0-9._~-]+(?:[\/?#][^\s"'<>]*)?/i;
+const DOLA_CONVERSATION_URL_RE = /https?:\/\/(?:www\.)?dola\.com\/chat\/[A-Za-z0-9._~-]+(?:[\/?#][^\s"'<>]*)?/i;
 
-export function extractDoubaoShareUrl(value: string | null | undefined) {
+export function extractDolaShareUrl(value: string | null | undefined) {
   if (!value) return null;
-  const matched = value.match(DOUBAO_SHARE_URL_RE)?.[0];
+  const matched = value.match(DOLA_SHARE_URL_RE)?.[0];
   return matched?.replace(/[)\]}>，。！？；;]+$/, "") || null;
 }
 
-export function extractDoubaoConversationUrl(value: string | null | undefined) {
+export function extractDolaConversationUrl(value: string | null | undefined) {
   if (!value) return null;
-  const matched = value.match(DOUBAO_CONVERSATION_URL_RE)?.[0];
+  const matched = value.match(DOLA_CONVERSATION_URL_RE)?.[0];
   return matched?.replace(/[)\]}>，。！？；;]+$/, "") || null;
 }
 
@@ -27,19 +27,19 @@ export function containsPromptSignature(value: string, prompt: string) {
   return signature.length > 0 && normalizeComparableText(value).includes(signature);
 }
 
-export function isDoubaoPromptRewritePage(pageText: string) {
+export function isDolaPromptRewritePage(pageText: string) {
   const text = pageText.replace(/\s+/g, " ").trim();
   return /完整\s*\d+(?:\.\d+)?\s*秒视频生成指令|可直接用于(?:AI\s*)?视频生成工具|要不要我再精简一版提示词/.test(text);
 }
 
-export function isDoubaoDesktopDownloadPrompt(pageText: string) {
+export function isDolaDesktopDownloadPrompt(pageText: string) {
   const text = pageText.replace(/\s+/g, " ").trim();
   return text.includes("下载电脑版")
     && text.includes("使用完整功能")
     && text.includes("下次提醒我");
 }
 
-export function isDoubaoGenerationComplete(pageText: string) {
+export function isDolaGenerationComplete(pageText: string) {
   const text = pageText.replace(/\s+/g, " ").trim();
   return /你的视频(?:已经|已)?生成好[了啦]|视频(?:已经|已)?生成(?:完成|成功|好[了啦])|生成视频(?:已经|已)?完成/.test(text);
 }
@@ -58,13 +58,13 @@ export function hasNewGenerationCompletion(currentText: string, baselineText: st
   return GENERATION_COMPLETE_PATTERNS.some((pattern) => countMatches(current, pattern) > countMatches(baseline, pattern));
 }
 
-export function getNewDoubaoVideoUrls(currentUrls: string[], baselineUrls: string[]) {
+export function getNewDolaVideoUrls(currentUrls: string[], baselineUrls: string[]) {
   const baseline = new Set(baselineUrls);
   return Array.from(new Set(currentUrls.filter((url) => {
     if (!/^https?:\/\//i.test(url) || baseline.has(url)) return false;
     try {
       const hostname = new URL(url).hostname.toLowerCase();
-      return hostname !== "doubao.com" && hostname !== "www.doubao.com";
+      return hostname !== "dola.com" && hostname !== "www.dola.com";
     } catch {
       return false;
     }
@@ -83,7 +83,7 @@ export interface GenerationReadyInput {
 }
 
 /**
- * Decides whether a finished Doubao video is safe to share. Doubao renders the
+ * Decides whether a finished Dola video is safe to share. Dola renders the
  * "视频生成好了" text before the finished video card appears; copying the share
  * link in that window yields a thread URL without the video. A completion
  * message alone is never sufficient: the current task must have a new card.
@@ -97,7 +97,7 @@ export function isGenerationReadyForShare(input: GenerationReadyInput) {
   return videoReady;
 }
 
-export function extractDoubaoFailureMessage(pageText: string) {
+export function extractDolaFailureMessage(pageText: string) {
   const text = pageText.replace(/\s+/g, " ").trim();
   if (!text) return null;
 
