@@ -38,7 +38,7 @@ const operationLogs = ref<OperationLog[]>([]);
 const apiUsers = ref<ApiUser[]>([]);
 const creditLedger = ref<CreditLedgerEntry[]>([]);
 const apiStatus = ref<ApiServerStatus>({
-  version: "0.2.0",
+  version: "0.2.1",
   enabled: false,
   running: false,
   port: 0,

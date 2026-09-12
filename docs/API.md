@@ -3,7 +3,7 @@
 ## 基础信息
 
 - 默认地址：`http://127.0.0.1:17888`
-- 当前接口版本：`0.2.0`
+- 当前接口版本：`0.2.1`
 - 认证：`Authorization: Bearer <token>`
 - `/health`、`/api/auth/register`、`/api/auth/login` 无需登录；其余接口均需要 Bearer Token。
 - 首次运行会生成随机管理端 API Key。该 Key 可绕过用户积分，仅限服务端保管，不要发给普通用户。

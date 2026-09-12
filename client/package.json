@@ -1,6 +1,6 @@
 {
   "name": "dola-api-client",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Dola API 用户生成客户端",
   "main": "main.cjs",
   "private": true
