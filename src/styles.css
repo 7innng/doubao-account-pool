@@ -403,6 +403,64 @@ textarea:focus {
   margin: 0;
 }
 
+.user-management-grid {
+  display: grid;
+  grid-template-columns: minmax(250px, 330px) minmax(0, 1fr);
+  gap: 18px;
+  width: calc(100% - 36px);
+  max-width: 1440px;
+  margin: 18px auto;
+  align-items: start;
+}
+
+.user-management-grid .panel {
+  margin: 0;
+}
+
+.user-create-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.user-create-panel label {
+  display: grid;
+  gap: 7px;
+}
+
+.user-create-panel label > span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.user-list-panel {
+  min-width: 0;
+}
+
+.user-credit-value,
+.credit-positive {
+  color: #16784a;
+}
+
+.credit-negative {
+  color: #c43e3e;
+}
+
+.ledger-title {
+  margin: 24px 0 12px;
+}
+
+.ledger-table-wrap {
+  max-height: 330px;
+  overflow: auto;
+}
+
+@media (max-width: 980px) {
+  .user-management-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .api-test-grid {
   grid-template-columns: minmax(0, 1fr) minmax(360px, 0.85fr);
 }

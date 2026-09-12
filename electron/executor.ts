@@ -385,6 +385,7 @@ export class DolaExecutor {
       const shouldRefundQuota = !submittedToDola || isRefundableExecutionError(error);
       if (shouldRefundQuota) {
         this.database.refundQuota(account.id, request.model);
+        this.database.refundApiUserCreditsForRequest(requestId);
       }
       if (isDestroyedWindowError(error)) {
         const suffix = shouldRefundQuota ? "，已退回预扣额度" : "；Dola端已提交的生成无法撤回";

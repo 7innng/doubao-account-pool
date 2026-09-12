@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src http: https:; img-src 'self' data: blob:; media-src http: https: blob:;" />
+  <title>Dola API 客户端</title>
+  <style>
+    :root { color-scheme: light; font-family: Inter, "PingFang SC", "Microsoft YaHei", sans-serif; color: #18202d; background: #f4f6fa; --primary:#6658ee; --primary2:#4d3fd8; --border:#dfe4ed; --muted:#687385; --danger:#c43e3e; --success:#117647; }
+    * { box-sizing: border-box; }
+    body { margin:0; min-width:720px; min-height:100vh; background:radial-gradient(circle at 8% 0,#ece9ff 0,transparent 32%),#f5f7fb; }
+    button,input,textarea { font:inherit; }
+    button { cursor:pointer; }
+    button:disabled { cursor:not-allowed; opacity:.55; }
+    .shell { width:min(1100px,calc(100% - 36px)); margin:0 auto; padding:24px 0 42px; }
+    .top { display:flex; align-items:center; justify-content:space-between; gap:20px; margin-bottom:18px; }
+    .brand { display:flex; align-items:center; gap:12px; }
+    .logo { width:44px;height:44px;border-radius:14px;background:linear-gradient(145deg,#7c6cff,#5140dc);box-shadow:0 10px 24px #6658ee45;display:grid;place-items:center;color:#fff;font-weight:900;font-size:18px; }
+    h1,h2,h3,p { margin:0; }
+    h1 { font-size:22px; } h2 { font-size:17px; } h3 { font-size:14px; }
+    .sub { color:var(--muted);font-size:13px;margin-top:4px; }
+    .userbar { display:flex;align-items:center;gap:10px; }
+    .credits { padding:9px 13px;border:1px solid #d9d3ff;background:#f3f0ff;border-radius:12px;color:#4d3fd8;font-weight:800; }
+    .card { background:#fff;border:1px solid var(--border);border-radius:16px;box-shadow:0 10px 30px #1e2a4410;padding:20px; }
+    .api-card { display:grid;grid-template-columns:1fr auto;gap:12px;align-items:end;margin-bottom:18px; }
+    label { display:grid;gap:7px;color:#3c4655;font-size:13px;font-weight:700; }
+    input,textarea { width:100%;border:1px solid #ccd3df;border-radius:10px;padding:11px 12px;background:#fff;color:#18202d;outline:none;transition:.15s; }
+    input:focus,textarea:focus { border-color:#7769ef;box-shadow:0 0 0 3px #6658ee1c; }
+    .btn { border:1px solid #ccd3df;background:#fff;color:#273142;border-radius:10px;padding:10px 15px;font-weight:750;white-space:nowrap; }
+    .btn:hover { background:#f7f8fb; }
+    .btn.primary { color:#fff;border-color:var(--primary);background:var(--primary); }
+    .btn.primary:hover { background:var(--primary2); }
+    .auth { width:min(520px,100%);margin:70px auto 0; }
+    .auth-tabs { display:flex;gap:6px;padding:4px;background:#f0f2f6;border-radius:11px;margin:20px 0; }
+    .auth-tabs button { flex:1;border:0;border-radius:8px;padding:9px;background:transparent;color:var(--muted);font-weight:750; }
+    .auth-tabs button.active { background:#fff;color:#3021bc;box-shadow:0 2px 8px #1c29451a; }
+    .auth-form { display:grid;gap:14px; }
+    .message { min-height:20px;margin-top:12px;font-size:13px;color:var(--danger);white-space:pre-wrap; }
+    .message.ok { color:var(--success); }
+    .workspace { display:grid;grid-template-columns:minmax(0,1.25fr) minmax(330px,.75fr);gap:18px;align-items:start; }
+    .section-head { display:flex;justify-content:space-between;align-items:start;gap:16px;margin-bottom:18px; }
+    .fixed { display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end; }
+    .tag { border-radius:999px;background:#f2f0ff;color:#5445d7;padding:6px 9px;font-size:12px;font-weight:750; }
+    .form { display:grid;gap:16px; }
+    textarea { resize:vertical;min-height:160px;line-height:1.65; }
+    .drop { border:1px dashed #b8bfd0;border-radius:12px;background:#fafbfe;padding:18px;text-align:center;color:var(--muted);position:relative; }
+    .drop input { position:absolute;inset:0;opacity:0;cursor:pointer; }
+    .drop strong { display:block;color:#3c4655;margin-bottom:4px; }
+    .files { margin:10px 0 0;padding:0;list-style:none;display:flex;flex-wrap:wrap;gap:7px; }
+    .files li { max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:#f0f2f6;border-radius:7px;padding:6px 9px;font-size:12px; }
+    .submit-row { display:flex;align-items:center;justify-content:space-between;gap:12px; }
+    .cost { color:var(--muted);font-size:13px; }
+    .result { min-height:390px; }
+    .status-line { display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin:16px 0; }
+    .pill { border-radius:999px;padding:6px 10px;font-size:12px;font-weight:800;background:#eef1f5;color:#536070; }
+    .pill.accepted,.pill.running { background:#fff5ce;color:#856000; }
+    .pill.success { background:#e8f8ef;color:var(--success); }
+    .pill.failed,.pill.stopped { background:#ffeded;color:var(--danger); }
+    code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;overflow-wrap:anywhere; }
+    pre { max-height:270px;overflow:auto;border-radius:10px;background:#141821;color:#dfe5f1;padding:13px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;line-height:1.55; }
+    video { width:100%;border-radius:12px;background:#111;margin-top:12px; }
+    .empty { display:grid;place-items:center;min-height:280px;text-align:center;color:#8490a2;line-height:1.7; }
+    .hidden { display:none !important; }
+    .recent { margin-top:18px; }
+    .recent-list { display:grid;gap:8px;margin-top:12px; }
+    .recent-item { border:1px solid var(--border);border-radius:10px;padding:10px;background:#fff;display:grid;gap:5px; }
+    @media(max-width:850px){.workspace{grid-template-columns:1fr}.result{min-height:260px}}
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="top">
+      <div class="brand"><div class="logo">D</div><div><h1>Dola API 客户端</h1><p class="sub">Seedance 2.5 · 30 秒视频生成</p></div></div>
+      <div id="userbar" class="userbar hidden"><span id="username"></span><span class="credits">积分 <b id="credits">0</b></span><button id="logout" class="btn">退出</button></div>
+    </header>
+
+    <section class="card api-card">
+      <label>API 地址<input id="apiBase" type="url" placeholder="https://api.example.com" autocomplete="url" /></label>
+      <button id="testApi" class="btn">检测连接</button>
+    </section>
+
+    <section id="auth" class="card auth">
+      <div><h2>登录后开始生成</h2><p class="sub">API 地址和登录令牌只保存在这台电脑。</p></div>
+      <div class="auth-tabs"><button id="loginTab" class="active">登录</button><button id="registerTab">注册</button></div>
+      <form id="authForm" class="auth-form">
+        <label>用户名<input id="authUsername" required minlength="3" maxlength="32" autocomplete="username" /></label>
+        <label>密码<input id="authPassword" required type="password" minlength="8" maxlength="128" autocomplete="current-password" /></label>
+        <button id="authSubmit" class="btn primary" type="submit">登录</button>
+      </form>
+      <p id="authMessage" class="message"></p>
+    </section>
+
+    <section id="app" class="workspace hidden">
+      <form id="generateForm" class="card form">
+        <div class="section-head"><div><h2>创建视频</h2><p class="sub">图片可不选，一次最多 10 张。</p></div><div class="fixed"><span class="tag">Seedance 2.5</span><span class="tag">30 秒</span><span class="tag">2 积分/次</span></div></div>
+        <label>提示词<textarea id="prompt" required placeholder="描述你想生成的视频内容、画面、镜头和风格……"></textarea></label>
+        <div>
+          <label class="drop"><input id="images" type="file" accept="image/*" multiple /><strong>选择参考图片</strong><span>点击或拖入图片，最多 10 张</span></label>
+          <ul id="fileList" class="files"></ul>
+        </div>
+        <div class="submit-row"><span class="cost">提交成功后扣除 2 积分</span><button id="generate" class="btn primary" type="submit">开始生成</button></div>
+        <p id="generateMessage" class="message"></p>
+      </form>
+
+      <aside>
+        <div class="card result">
+          <div class="section-head"><div><h2>生成结果</h2><p class="sub">提交后每 2 秒自动查询。</p></div><button id="refreshResult" class="btn hidden" type="button">刷新</button></div>
+          <div id="emptyResult" class="empty">还没有任务<br />在左侧填写提示词后开始生成</div>
+          <div id="resultBody" class="hidden"><div class="status-line"><span id="status" class="pill"></span><code id="requestId"></code></div><p id="resultMessage" class="sub"></p><video id="video" class="hidden" controls></video><p id="videoLinkWrap" class="hidden"><a id="videoLink" class="btn primary" target="_blank" rel="noreferrer">打开视频</a></p><pre id="json"></pre></div>
+        </div>
+        <div class="card recent"><h3>最近任务</h3><div id="recentList" class="recent-list"><p class="sub">暂无任务</p></div></div>
+      </aside>
+    </section>
+  </main>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const state = { mode:"login", token:localStorage.getItem("dola.token")||"", user:null, requestId:"", pollTimer:null, files:[] };
+    $("apiBase").value = localStorage.getItem("dola.apiBase") || "";
+
+    function baseUrl(){ return $("apiBase").value.trim().replace(/\/+$/,""); }
+    function saveBase(){ const value=baseUrl(); if(!/^https?:\/\//i.test(value)) throw new Error("API 地址必须以 http:// 或 https:// 开头"); localStorage.setItem("dola.apiBase",value); return value; }
+    async function api(path, options={}){
+      const base=saveBase(); const headers=new Headers(options.headers||{}); if(state.token) headers.set("Authorization",`Bearer ${state.token}`);
+      const response=await fetch(base+path,{...options,headers}); const text=await response.text(); let data={}; try{data=text?JSON.parse(text):{}}catch{throw new Error(`接口返回的不是 JSON（HTTP ${response.status}）`)}
+      if(!response.ok){ const error=new Error(data.error||data.message||`HTTP ${response.status}`); error.status=response.status; throw error; } return data;
+    }
+    function setMessage(id,text,ok=false){ const el=$(id); el.textContent=text||""; el.classList.toggle("ok",ok); }
+    function setLoggedIn(user){ state.user=user; $("auth").classList.add("hidden"); $("app").classList.remove("hidden"); $("userbar").classList.remove("hidden"); $("username").textContent=user.username; $("credits").textContent=user.credits; }
+    function setLoggedOut(){ state.token="";state.user=null;localStorage.removeItem("dola.token");clearTimeout(state.pollTimer);$("auth").classList.remove("hidden");$("app").classList.add("hidden");$("userbar").classList.add("hidden"); }
+    async function refreshMe(){ const data=await api("/api/me"); setLoggedIn(data.user); return data.user; }
+    async function loadRecent(){ try{const data=await api("/api/me/requests?limit=6");const list=$("recentList");list.innerHTML="";(data.requests||[]).forEach(item=>{const div=document.createElement("button");div.type="button";div.className="recent-item";div.innerHTML=`<code>${escapeHtml(item.requestId)}</code><span class="sub">${escapeHtml(item.status)} · ${escapeHtml(item.message||"")}</span>`;div.onclick=()=>{state.requestId=item.requestId;showResult(item);};list.appendChild(div)});if(!data.requests?.length)list.innerHTML='<p class="sub">暂无任务</p>'}catch{} }
+    function escapeHtml(value){return String(value).replace(/[&<>'"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[c]));}
+    function setMode(mode){state.mode=mode;$("loginTab").classList.toggle("active",mode==="login");$("registerTab").classList.toggle("active",mode==="register");$("authSubmit").textContent=mode==="login"?"登录":"注册";$("authPassword").autocomplete=mode==="login"?"current-password":"new-password";setMessage("authMessage","");}
+    $("loginTab").onclick=()=>setMode("login"); $("registerTab").onclick=()=>setMode("register");
+    $("authForm").onsubmit=async(e)=>{e.preventDefault();const btn=$("authSubmit");btn.disabled=true;setMessage("authMessage","");try{const data=await api(`/api/auth/${state.mode}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:$("authUsername").value.trim(),password:$("authPassword").value})});state.token=data.accessToken;localStorage.setItem("dola.token",state.token);setLoggedIn(data.user);await loadRecent();}catch(error){setMessage("authMessage",error.message)}finally{btn.disabled=false}};
+    $("logout").onclick=async()=>{try{await api("/api/auth/logout",{method:"POST"})}catch{}setLoggedOut()};
+    $("testApi").onclick=async()=>{try{const data=await api("/health");setMessage("authMessage",data.ok?"API 连接正常":"API 状态异常",Boolean(data.ok))}catch(error){setMessage("authMessage",error.message)}};
+    $("images").onchange=(e)=>{const files=Array.from(e.target.files||[]);if(files.length>10){e.target.value="";state.files=[];setMessage("generateMessage","参考图最多 10 张，请重新选择");}else{state.files=files;setMessage("generateMessage","");}$("fileList").innerHTML=state.files.map(file=>`<li title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</li>`).join("")};
+    function showResult(data){$("emptyResult").classList.add("hidden");$("resultBody").classList.remove("hidden");$("refreshResult").classList.remove("hidden");$("status").textContent=data.status||"unknown";$("status").className=`pill ${data.status||""}`;$("requestId").textContent=data.requestId||state.requestId;$("resultMessage").textContent=data.message||"";$("json").textContent=JSON.stringify(data,null,2);const url=data.cleanVideoUrl||"";$("video").classList.toggle("hidden",!url);$("videoLinkWrap").classList.toggle("hidden",!url);if(url){$("video").src=url;$("videoLink").href=url}}
+    async function poll(){if(!state.requestId)return;try{const data=await api(`/api/requests/${encodeURIComponent(state.requestId)}`);showResult(data);await refreshMe();if(["success","failed","stopped"].includes(data.status)){await loadRecent();return;}state.pollTimer=setTimeout(poll,2000)}catch(error){setMessage("generateMessage",error.message);if(error.status===401)setLoggedOut();}}
+    $("refreshResult").onclick=()=>poll();
+    $("generateForm").onsubmit=async(e)=>{e.preventDefault();if(state.user?.credits<2){setMessage("generateMessage","积分不足，请联系服务提供方发放积分");return;}const btn=$("generate");btn.disabled=true;setMessage("generateMessage","");clearTimeout(state.pollTimer);try{const form=new FormData();form.append("prompt",$("prompt").value.trim());form.append("model","seedance_2_5");form.append("source","dola-user-client");state.files.forEach(file=>form.append("referenceImage",file,file.name));const data=await api("/api/generate",{method:"POST",body:form});state.requestId=data.requestId;showResult(data);await refreshMe();await loadRecent();state.pollTimer=setTimeout(poll,2000)}catch(error){setMessage("generateMessage",error.message);if(error.status===401)setLoggedOut();await refreshMe().catch(()=>{})}finally{btn.disabled=false}};
+
+    (async()=>{if(state.token&&baseUrl()){try{await refreshMe();await loadRecent()}catch{setLoggedOut()}}})();
+  </script>
+</body>
+</html>

@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { AccountUpdateInput, AppSettingsUpdateInput } from "../types.js";
+import type { AccountUpdateInput, ApiUserCreateInput, AppSettingsUpdateInput } from "../types.js";
 
 const api = {
   accounts: {
@@ -25,6 +25,15 @@ const api = {
   apiRequests: {
     list: (limit?: number) => ipcRenderer.invoke("api-requests:list", limit),
     clear: () => ipcRenderer.invoke("api-requests:clear")
+  },
+  apiUsers: {
+    list: () => ipcRenderer.invoke("api-users:list"),
+    create: (input: ApiUserCreateInput) => ipcRenderer.invoke("api-users:create", input),
+    grant: (input: { userId: number; amount: number; note?: string }) => ipcRenderer.invoke("api-users:grant", input),
+    setDisabled: (input: { userId: number; disabled: boolean }) => ipcRenderer.invoke("api-users:set-disabled", input)
+  },
+  creditLedger: {
+    list: (userId?: number, limit?: number) => ipcRenderer.invoke("credit-ledger:list", userId, limit)
   },
   operationLogs: {
     list: (limit?: number) => ipcRenderer.invoke("operation-logs:list", limit),

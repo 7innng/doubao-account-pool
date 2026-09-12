@@ -1,0 +1,22 @@
+appId: com.local.dola-api-client
+productName: Dola API客户端
+artifactName: ${productName}-${version}-win-${arch}.${ext}
+directories:
+  output: ../release/client
+files:
+  - index.html
+  - main.cjs
+  - package.json
+electronVersion: 36.9.5
+npmRebuild: false
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Dola API客户端

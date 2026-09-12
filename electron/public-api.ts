@@ -7,6 +7,8 @@ export function toPublicApiRequest(request: ApiRequest) {
     message: request.message,
     model: request.model,
     referenceImageCount: request.referenceImagePaths.length,
+    creditCost: request.creditCost,
+    creditRefunded: request.creditRefunded,
     cleanVideoUrl: request.cleanVideoUrl,
     outputVideoPath: request.outputVideoPath,
     createdAt: request.createdAt,

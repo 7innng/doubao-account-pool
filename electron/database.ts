@@ -1,4 +1,5 @@
 import path from "node:path";
+import { randomBytes } from "node:crypto";
 import Database from "better-sqlite3";
 import { app } from "electron";
 import type {
@@ -6,12 +7,15 @@ import type {
   AccountCreateInput,
   AccountRuntimeStatus,
   AccountUpdateInput,
+  ApiUser,
+  ApiUserCreateInput,
   ApiRequest,
   ApiRequestCreateInput,
   ApiRequestStatus,
   ApiRequestUpdateInput,
   AppSettings,
   AppSettingsUpdateInput,
+  CreditLedgerEntry,
   DolaModel,
   OperationLog,
   OperationLogCreateInput
@@ -23,7 +27,7 @@ const OPERATION_LOG_RETENTION_DAYS = 3;
 const DEFAULT_SETTINGS: AppSettings = {
   apiServiceEnabled: true,
   apiPort: 17888,
-  apiKey: "local-dola-key",
+  apiKey: `dola-admin-${randomBytes(24).toString("base64url")}`,
   executorEnabled: true,
   showExecutorWindow: false,
   autoCloseExecutorWindow: true,
@@ -49,6 +53,7 @@ export class AppDatabase {
     const dbPath = path.join(app.getPath("userData"), "dola-manager.sqlite3");
     this.db = new Database(dbPath);
     this.db.pragma("journal_mode = WAL");
+    this.db.pragma("foreign_keys = ON");
     this.migrate();
   }
 
@@ -75,6 +80,39 @@ export class AppDatabase {
         updated_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS api_users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+        password_hash TEXT NOT NULL,
+        password_salt TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'user',
+        credits INTEGER NOT NULL DEFAULT 0,
+        disabled INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS api_sessions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        token_hash TEXT NOT NULL UNIQUE,
+        expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(user_id) REFERENCES api_users(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS credit_ledger (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        amount INTEGER NOT NULL,
+        balance_after INTEGER NOT NULL,
+        type TEXT NOT NULL,
+        request_id TEXT,
+        note TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(user_id) REFERENCES api_users(id) ON DELETE CASCADE
+      );
+
       CREATE TABLE IF NOT EXISTS api_requests (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         request_id TEXT NOT NULL UNIQUE,
@@ -86,6 +124,9 @@ export class AppDatabase {
         prompt TEXT NOT NULL,
         reference_image_path TEXT,
         reference_image_paths TEXT,
+        user_id INTEGER,
+        credit_cost INTEGER NOT NULL DEFAULT 0,
+        credit_refunded INTEGER NOT NULL DEFAULT 0,
         remove_watermark INTEGER NOT NULL DEFAULT 1,
         callback_url TEXT,
         dola_thread_url TEXT,
@@ -95,7 +136,8 @@ export class AppDatabase {
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         finished_at TEXT,
-        FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE SET NULL
+        FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE SET NULL,
+        FOREIGN KEY(user_id) REFERENCES api_users(id) ON DELETE SET NULL
       );
 
       CREATE TABLE IF NOT EXISTS operation_logs (
@@ -112,6 +154,8 @@ export class AppDatabase {
 
       CREATE INDEX IF NOT EXISTS idx_operation_logs_created_at ON operation_logs(created_at);
       CREATE INDEX IF NOT EXISTS idx_operation_logs_request_id ON operation_logs(request_id);
+      CREATE INDEX IF NOT EXISTS idx_api_sessions_token_hash ON api_sessions(token_hash);
+      CREATE INDEX IF NOT EXISTS idx_credit_ledger_user_id ON credit_ledger(user_id, id DESC);
     `);
 
     this.ensureAccountColumns();
@@ -119,6 +163,7 @@ export class AppDatabase {
     this.pruneOperationLogs();
     this.cleanInvalidSuccessfulResults();
     this.ensureDefaultSettings();
+    this.rotateInsecureDefaultApiKey();
     this.migrateExecutorConcurrency();
   }
 
@@ -393,7 +438,166 @@ export class AppDatabase {
     return this.getSettings();
   }
 
-  listApiRequests(limit = 100): ApiRequest[] {
+  listApiUsers(): ApiUser[] {
+    return this.db.prepare(`
+      SELECT id, username, role, credits, disabled, created_at AS createdAt, updated_at AS updatedAt
+      FROM api_users
+      ORDER BY id DESC
+    `).all().map(normalizeApiUser);
+  }
+
+  getApiUser(id: number): ApiUser | undefined {
+    const row = this.db.prepare(`
+      SELECT id, username, role, credits, disabled, created_at AS createdAt, updated_at AS updatedAt
+      FROM api_users WHERE id = ?
+    `).get(id);
+    return row ? normalizeApiUser(row) : undefined;
+  }
+
+  getApiUserAuthByUsername(username: string) {
+    return this.db.prepare(`
+      SELECT id, username, role, credits, disabled, password_hash AS passwordHash,
+        password_salt AS passwordSalt, created_at AS createdAt, updated_at AS updatedAt
+      FROM api_users WHERE username = ? COLLATE NOCASE
+    `).get(username) as (ApiUser & { passwordHash: string; passwordSalt: string; disabled: number | boolean }) | undefined;
+  }
+
+  createApiUser(
+    input: ApiUserCreateInput,
+    passwordHash: string,
+    passwordSalt: string
+  ): ApiUser {
+    const timestamp = now();
+    const initialCredits = Math.max(0, Math.trunc(input.initialCredits || 0));
+    const result = this.db.prepare(`
+      INSERT INTO api_users (username, password_hash, password_salt, role, credits, disabled, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, 0, ?, ?)
+    `).run(
+      input.username.trim(),
+      passwordHash,
+      passwordSalt,
+      input.role === "admin" ? "admin" : "user",
+      initialCredits,
+      timestamp,
+      timestamp
+    );
+    const userId = Number(result.lastInsertRowid);
+    if (initialCredits > 0) {
+      this.db.prepare(`
+        INSERT INTO credit_ledger (user_id, amount, balance_after, type, request_id, note, created_at)
+        VALUES (?, ?, ?, 'grant', NULL, '创建用户初始积分', ?)
+      `).run(userId, initialCredits, initialCredits, timestamp);
+    }
+    return this.getApiUser(userId)!;
+  }
+
+  createApiSession(userId: number, tokenHash: string, expiresAt: string) {
+    const timestamp = now();
+    this.db.prepare("DELETE FROM api_sessions WHERE expires_at <= ?").run(timestamp);
+    this.db.prepare(`
+      INSERT INTO api_sessions (user_id, token_hash, expires_at, created_at)
+      VALUES (?, ?, ?, ?)
+    `).run(userId, tokenHash, expiresAt, timestamp);
+  }
+
+  getApiUserBySessionHash(tokenHash: string): ApiUser | undefined {
+    const row = this.db.prepare(`
+      SELECT users.id, users.username, users.role, users.credits, users.disabled,
+        users.created_at AS createdAt, users.updated_at AS updatedAt
+      FROM api_sessions sessions
+      JOIN api_users users ON users.id = sessions.user_id
+      WHERE sessions.token_hash = ? AND sessions.expires_at > ?
+    `).get(tokenHash, now());
+    return row ? normalizeApiUser(row) : undefined;
+  }
+
+  deleteApiSession(tokenHash: string) {
+    return this.db.prepare("DELETE FROM api_sessions WHERE token_hash = ?").run(tokenHash).changes > 0;
+  }
+
+  setApiUserDisabled(userId: number, disabled: boolean) {
+    const result = this.db.prepare("UPDATE api_users SET disabled = ?, updated_at = ? WHERE id = ?")
+      .run(disabled ? 1 : 0, now(), userId);
+    if (result.changes !== 1) throw new Error("用户不存在");
+    if (disabled) this.db.prepare("DELETE FROM api_sessions WHERE user_id = ?").run(userId);
+    return this.getApiUser(userId)!;
+  }
+
+  grantApiUserCredits(userId: number, amount: number, note = "管理员发放积分") {
+    const normalizedAmount = Math.trunc(amount);
+    if (!normalizedAmount) throw new Error("积分变动不能为 0");
+    return this.db.transaction(() => {
+      const user = this.getApiUser(userId);
+      if (!user) throw new Error("用户不存在");
+      const balanceAfter = user.credits + normalizedAmount;
+      if (balanceAfter < 0) throw new Error("扣减后积分不能小于 0");
+      const timestamp = now();
+      this.db.prepare("UPDATE api_users SET credits = ?, updated_at = ? WHERE id = ?")
+        .run(balanceAfter, timestamp, userId);
+      this.db.prepare(`
+        INSERT INTO credit_ledger (user_id, amount, balance_after, type, request_id, note, created_at)
+        VALUES (?, ?, ?, 'grant', NULL, ?, ?)
+      `).run(userId, normalizedAmount, balanceAfter, note.trim() || "管理员调整积分", timestamp);
+      return this.getApiUser(userId)!;
+    })();
+  }
+
+  consumeApiUserCredits(userId: number, amount: number, requestId: string) {
+    const cost = Math.max(1, Math.trunc(amount));
+    return this.db.transaction(() => {
+      const result = this.db.prepare(`
+        UPDATE api_users SET credits = credits - ?, updated_at = ?
+        WHERE id = ? AND disabled = 0 AND credits >= ?
+      `).run(cost, now(), userId, cost);
+      if (result.changes !== 1) return false;
+      const user = this.getApiUser(userId)!;
+      this.db.prepare(`
+        INSERT INTO credit_ledger (user_id, amount, balance_after, type, request_id, note, created_at)
+        VALUES (?, ?, ?, 'consume', ?, 'Seedance 2.5 视频生成', ?)
+      `).run(userId, -cost, user.credits, requestId, now());
+      return true;
+    })();
+  }
+
+  refundApiUserCreditsForRequest(requestId: string) {
+    return this.db.transaction(() => {
+      const request = this.db.prepare(`
+        SELECT user_id AS userId, credit_cost AS creditCost, credit_refunded AS creditRefunded
+        FROM api_requests WHERE request_id = ?
+      `).get(requestId) as { userId: number | null; creditCost: number; creditRefunded: number } | undefined;
+      if (!request?.userId || request.creditCost <= 0 || request.creditRefunded) return false;
+      const user = this.getApiUser(request.userId);
+      if (!user) return false;
+      const timestamp = now();
+      const balanceAfter = user.credits + request.creditCost;
+      this.db.prepare("UPDATE api_users SET credits = ?, updated_at = ? WHERE id = ?")
+        .run(balanceAfter, timestamp, request.userId);
+      this.db.prepare("UPDATE api_requests SET credit_refunded = 1 WHERE request_id = ?").run(requestId);
+      this.db.prepare(`
+        INSERT INTO credit_ledger (user_id, amount, balance_after, type, request_id, note, created_at)
+        VALUES (?, ?, ?, 'refund', ?, '任务提交前失败，退回积分', ?)
+      `).run(request.userId, request.creditCost, balanceAfter, requestId, timestamp);
+      return true;
+    })();
+  }
+
+  listCreditLedger(userId?: number, limit = 200): CreditLedgerEntry[] {
+    const where = userId ? "WHERE ledger.user_id = ?" : "";
+    const params = userId ? [userId, limit] : [limit];
+    return this.db.prepare(`
+      SELECT ledger.id, ledger.user_id AS userId, users.username, ledger.amount,
+        ledger.balance_after AS balanceAfter, ledger.type, ledger.request_id AS requestId,
+        ledger.note, ledger.created_at AS createdAt
+      FROM credit_ledger ledger
+      JOIN api_users users ON users.id = ledger.user_id
+      ${where}
+      ORDER BY ledger.id DESC LIMIT ?
+    `).all(...params) as CreditLedgerEntry[];
+  }
+
+  listApiRequests(limit = 100, userId?: number): ApiRequest[] {
+    const where = userId ? "WHERE api_requests.user_id = ?" : "";
+    const params = userId ? [userId, limit] : [limit];
     return this.db.prepare(`
       SELECT
         api_requests.id,
@@ -408,6 +612,10 @@ export class AppDatabase {
         api_requests.prompt,
         api_requests.reference_image_path AS referenceImagePath,
         api_requests.reference_image_paths AS referenceImagePathsJson,
+        api_requests.user_id AS userId,
+        api_users.username,
+        api_requests.credit_cost AS creditCost,
+        api_requests.credit_refunded AS creditRefunded,
         api_requests.remove_watermark AS removeWatermark,
         api_requests.callback_url AS callbackUrl,
         api_requests.dola_thread_url AS dolaThreadUrl,
@@ -419,9 +627,11 @@ export class AppDatabase {
         api_requests.finished_at AS finishedAt
       FROM api_requests
       LEFT JOIN accounts ON accounts.id = api_requests.account_id
+      LEFT JOIN api_users ON api_users.id = api_requests.user_id
+      ${where}
       ORDER BY api_requests.id DESC
       LIMIT ?
-    `).all(limit).map(normalizeApiRequest);
+    `).all(...params).map(normalizeApiRequest);
   }
 
   getApiRequest(requestId: string): ApiRequest | undefined {
@@ -439,6 +649,10 @@ export class AppDatabase {
         api_requests.prompt,
         api_requests.reference_image_path AS referenceImagePath,
         api_requests.reference_image_paths AS referenceImagePathsJson,
+        api_requests.user_id AS userId,
+        api_users.username,
+        api_requests.credit_cost AS creditCost,
+        api_requests.credit_refunded AS creditRefunded,
         api_requests.remove_watermark AS removeWatermark,
         api_requests.callback_url AS callbackUrl,
         api_requests.dola_thread_url AS dolaThreadUrl,
@@ -450,6 +664,7 @@ export class AppDatabase {
         api_requests.finished_at AS finishedAt
       FROM api_requests
       LEFT JOIN accounts ON accounts.id = api_requests.account_id
+      LEFT JOIN api_users ON api_users.id = api_requests.user_id
       WHERE api_requests.request_id = ?
     `).get(requestId);
     return row ? normalizeApiRequest(row) : undefined;
@@ -468,13 +683,16 @@ export class AppDatabase {
         prompt,
         reference_image_path,
         reference_image_paths,
+        user_id,
+        credit_cost,
+        credit_refunded,
         remove_watermark,
         callback_url,
         created_at,
         updated_at,
         finished_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       input.requestId,
       input.source || "local-api",
@@ -485,6 +703,9 @@ export class AppDatabase {
       input.prompt,
       input.referenceImagePath || null,
       JSON.stringify(input.referenceImagePaths || (input.referenceImagePath ? [input.referenceImagePath] : [])),
+      input.userId ?? null,
+      Math.max(0, Math.trunc(input.creditCost || 0)),
+      0,
       input.removeWatermark === false ? 0 : 1,
       input.callbackUrl || null,
       timestamp,
@@ -622,6 +843,16 @@ export class AppDatabase {
     }
   }
 
+  private rotateInsecureDefaultApiKey() {
+    const row = this.db.prepare("SELECT value FROM settings WHERE key = 'apiKey'").get() as { value?: string } | undefined;
+    const value = row?.value ? String(parseSettingValue("apiKey", row.value)) : "";
+    if (value && value !== "local-dola-key") return;
+    this.db.prepare(`
+      INSERT INTO settings (key, value, updated_at) VALUES ('apiKey', ?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+    `).run(stringifySettingValue(DEFAULT_SETTINGS.apiKey), now());
+  }
+
   private migrateExecutorConcurrency() {
     const migrationKey = "executorConcurrencyV1";
     const migrated = this.db.prepare("SELECT 1 FROM settings WHERE key = ?").get(migrationKey);
@@ -663,6 +894,9 @@ export class AppDatabase {
     this.addColumnIfMissing("api_requests", "source", "TEXT NOT NULL DEFAULT 'local'");
     this.addColumnIfMissing("api_requests", "reference_image_path", "TEXT");
     this.addColumnIfMissing("api_requests", "reference_image_paths", "TEXT");
+    this.addColumnIfMissing("api_requests", "user_id", "INTEGER");
+    this.addColumnIfMissing("api_requests", "credit_cost", "INTEGER NOT NULL DEFAULT 0");
+    this.addColumnIfMissing("api_requests", "credit_refunded", "INTEGER NOT NULL DEFAULT 0");
     this.addColumnIfMissing("api_requests", "remove_watermark", "INTEGER NOT NULL DEFAULT 1");
     this.addColumnIfMissing("api_requests", "callback_url", "TEXT");
     this.addColumnIfMissing("api_requests", "dola_thread_url", "TEXT");
@@ -752,7 +986,22 @@ function normalizeApiRequest(row: unknown): ApiRequest {
   return {
     ...request,
     referenceImagePaths,
+    userId: request.userId == null ? null : Number(request.userId),
+    username: request.username || null,
+    creditCost: Number(request.creditCost || 0),
+    creditRefunded: Boolean(request.creditRefunded),
     removeWatermark: Boolean(request.removeWatermark)
+  };
+}
+
+function normalizeApiUser(row: unknown): ApiUser {
+  const user = row as ApiUser & { disabled: number | boolean };
+  return {
+    ...user,
+    id: Number(user.id),
+    credits: Number(user.credits || 0),
+    disabled: Boolean(user.disabled),
+    role: user.role === "admin" ? "admin" : "user"
   };
 }
 

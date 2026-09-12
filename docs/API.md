@@ -3,10 +3,66 @@
 ## 基础信息
 
 - 默认地址：`http://127.0.0.1:17888`
-- 当前接口版本：`0.1.30`
-- 默认认证：`Authorization: Bearer local-dola-key`
-- 除 `/health` 外，其余接口均需要 Bearer Token。
-- 建议在“配置管理”中修改默认 API Key。
+- 当前接口版本：`0.2.0`
+- 认证：`Authorization: Bearer <token>`
+- `/health`、`/api/auth/register`、`/api/auth/login` 无需登录；其余接口均需要 Bearer Token。
+- 首次运行会生成随机管理端 API Key。该 Key 可绕过用户积分，仅限服务端保管，不要发给普通用户。
+
+## 用户注册与登录
+
+```http
+POST /api/auth/register
+Content-Type: application/json
+
+{"username":"demo_user","password":"至少8位密码"}
+```
+
+注册用户初始为 0 积分。登录与注册都会返回 `accessToken`，用户客户端后续将它作为 Bearer Token 使用。
+
+```http
+POST /api/auth/login
+Content-Type: application/json
+
+{"username":"demo_user","password":"至少8位密码"}
+```
+
+用户可查询自己的资料、积分流水和最近任务：
+
+```http
+GET /api/me
+GET /api/me/credits
+GET /api/me/requests?limit=20
+Authorization: Bearer <user-access-token>
+```
+
+退出登录并使当前 Token 立即失效：
+
+```http
+POST /api/auth/logout
+Authorization: Bearer <user-access-token>
+```
+
+Seedance 2.5 每次固定消耗 2 用户积分。任务在真正提交给 Dola 前失败时自动退款；已经提交到 Dola 的任务不会因取消或后处理失败而退款。
+
+## 管理端发放积分
+
+以下接口需要“配置管理”中的管理端 API Key，或管理员用户的登录 Token：
+
+```http
+GET /api/admin/users
+GET /api/admin/credits
+Authorization: Bearer <admin-token>
+```
+
+```http
+POST /api/admin/credits/grant
+Authorization: Bearer <admin-token>
+Content-Type: application/json
+
+{"userId":1,"amount":10,"note":"充值 10 积分"}
+```
+
+`amount` 为正数时发放，为负数时扣减；扣减后的余额不能小于 0。服务端软件中的“用户积分”页也可完成相同操作。
 
 ## 健康检查
 

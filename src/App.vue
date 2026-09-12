@@ -6,14 +6,17 @@ import type {
   ApiRequest,
   ApiRequestStatus,
   ApiServerStatus,
+  ApiUser,
+  ApiUserRole,
   AppSettings,
+  CreditLedgerEntry,
   DolaModel,
   LoginStatus,
   OperationLog,
   OperationLogStatus
 } from "../electron/types";
 
-type TabKey = "accounts" | "api-test" | "settings" | "logs" | "actions";
+type TabKey = "accounts" | "users" | "api-test" | "settings" | "logs" | "actions";
 
 interface ApiTestResponse {
   requestId?: string;
@@ -32,8 +35,10 @@ interface ApiTestResponse {
 const accounts = ref<Account[]>([]);
 const apiRequests = ref<ApiRequest[]>([]);
 const operationLogs = ref<OperationLog[]>([]);
+const apiUsers = ref<ApiUser[]>([]);
+const creditLedger = ref<CreditLedgerEntry[]>([]);
 const apiStatus = ref<ApiServerStatus>({
-  version: "0.1.30",
+  version: "0.2.0",
   enabled: false,
   running: false,
   port: 0,
@@ -60,6 +65,15 @@ const apiTestError = ref("");
 const apiTestResult = ref<ApiTestResponse | null>(null);
 const apiTestResultCopied = ref(false);
 const apiTestReferenceImages = ref<File[]>([]);
+const userFormError = ref("");
+const userFormSubmitting = ref(false);
+
+const userForm = reactive({
+  username: "",
+  password: "",
+  role: "user" as ApiUserRole,
+  initialCredits: 0
+});
 
 const apiTestForm = reactive({
   model: "seedance_2_5" as DolaModel,
@@ -79,7 +93,7 @@ const accountSettingsForm = reactive({
 const settingsForm = reactive<AppSettings>({
   apiServiceEnabled: true,
   apiPort: 17888,
-  apiKey: "local-dola-key",
+  apiKey: "",
   executorEnabled: true,
   showExecutorWindow: false,
   autoCloseExecutorWindow: true,
@@ -137,6 +151,7 @@ const filteredApiRequests = computed(() => {
 
     return [
       item.requestId,
+      item.username,
       item.source,
       item.prompt,
       item.message,
@@ -219,7 +234,7 @@ const filteredAccounts = computed(() => {
 
 const apiExample = computed(() => {
   const port = settingsForm.apiPort || 17888;
-  const token = settingsForm.apiKey || "local-dola-key";
+  const token = settingsForm.apiKey || "<管理端 API Key>";
   return `# 每个账号默认额度 ${settingsForm.dailyQuotaLimit}，Seedance 2.5 每次扣 ${settingsForm.seedance25Cost}
 curl -X POST http://127.0.0.1:${port}/api/generate \\
   -H "Authorization: Bearer ${token}" \\
@@ -232,7 +247,7 @@ curl -X POST http://127.0.0.1:${port}/api/generate \\
 
 const watermarkExample = computed(() => {
   const port = settingsForm.apiPort || 17888;
-  const token = settingsForm.apiKey || "local-dola-key";
+  const token = settingsForm.apiKey || "<管理端 API Key>";
   return `curl -X POST http://127.0.0.1:${port}/api/watermark/parse \\
   -H "Authorization: Bearer ${token}" \\
   -H "Content-Type: application/json" \\
@@ -404,21 +419,71 @@ async function refresh() {
   if (refreshInFlight) return;
   refreshInFlight = true;
   try {
-  const [accountRows, settings, status, requests, actions] = await Promise.all([
+  const [accountRows, settings, status, requests, actions, users, ledger] = await Promise.all([
     window.dolaManager.accounts.list(),
     window.dolaManager.settings.get(),
     window.dolaManager.apiServer.status(),
     window.dolaManager.apiRequests.list(100),
-    window.dolaManager.operationLogs.list(500)
+    window.dolaManager.operationLogs.list(500),
+    window.dolaManager.apiUsers.list(),
+    window.dolaManager.creditLedger.list(undefined, 500)
   ]);
   accounts.value = accountRows;
   apiRequests.value = requests;
   operationLogs.value = actions;
+  apiUsers.value = users;
+  creditLedger.value = ledger;
   apiStatus.value = status;
   Object.assign(settingsForm, settings);
   } finally {
     refreshInFlight = false;
   }
+}
+
+async function createApiUser() {
+  userFormError.value = "";
+  userFormSubmitting.value = true;
+  try {
+    await window.dolaManager.apiUsers.create({
+      username: userForm.username.trim(),
+      password: userForm.password,
+      role: userForm.role,
+      initialCredits: Math.max(0, Math.trunc(Number(userForm.initialCredits) || 0))
+    });
+    userForm.username = "";
+    userForm.password = "";
+    userForm.role = "user";
+    userForm.initialCredits = 0;
+    await refresh();
+  } catch (error) {
+    userFormError.value = error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': Error: /, "") : "创建用户失败";
+  } finally {
+    userFormSubmitting.value = false;
+  }
+}
+
+async function adjustUserCredits(user: ApiUser) {
+  const rawAmount = window.prompt(`调整 ${user.username} 的积分。正数为发放，负数为扣减：`, "10");
+  if (rawAmount === null) return;
+  const amount = Math.trunc(Number(rawAmount));
+  if (!amount) {
+    window.alert("请输入非零整数");
+    return;
+  }
+  const note = window.prompt("填写本次积分调整备注：", "管理员发放积分") ?? "管理员发放积分";
+  try {
+    await window.dolaManager.apiUsers.grant({ userId: user.id, amount, note });
+    await refresh();
+  } catch (error) {
+    window.alert(error instanceof Error ? error.message : "积分调整失败");
+  }
+}
+
+async function toggleApiUser(user: ApiUser) {
+  const action = user.disabled ? "启用" : "停用";
+  if (!window.confirm(`${action}用户 ${user.username}？${user.disabled ? "" : "停用后其现有登录会立即失效。"}`)) return;
+  await window.dolaManager.apiUsers.setDisabled({ userId: user.id, disabled: !user.disabled });
+  await refresh();
 }
 
 async function autoCheckAccountStatuses() {
@@ -746,6 +811,7 @@ onBeforeUnmount(() => {
 
     <nav class="tabs">
       <button :class="{ active: activeTab === 'accounts' }" @click="activeTab = 'accounts'">账号池</button>
+      <button :class="{ active: activeTab === 'users' }" @click="activeTab = 'users'">用户积分</button>
       <button :class="{ active: activeTab === 'api-test' }" @click="activeTab = 'api-test'">API 调试</button>
       <button :class="{ active: activeTab === 'settings' }" @click="activeTab = 'settings'">配置管理</button>
       <button :class="{ active: activeTab === 'logs' }" @click="activeTab = 'logs'">接口日志</button>
@@ -897,6 +963,90 @@ onBeforeUnmount(() => {
         </table>
         <div v-if="!accounts.length" class="empty compact">还没有账号。点击“添加账号”开始。</div>
         <div v-else-if="!filteredAccounts.length" class="empty compact">没有符合当前条件的账号。</div>
+      </div>
+    </section>
+
+    <section v-else-if="activeTab === 'users'" class="user-management-grid">
+      <form class="panel user-create-panel" @submit.prevent="createApiUser">
+        <div class="section-title">
+          <div>
+            <h2>创建接口用户</h2>
+            <p>注册用户默认 0 积分；也可以由服务端直接创建并发放初始积分。</p>
+          </div>
+        </div>
+        <label>
+          <span>用户名</span>
+          <input v-model="userForm.username" required minlength="3" maxlength="32" placeholder="3-32 位字母、数字、_ 或 -" />
+        </label>
+        <label>
+          <span>登录密码</span>
+          <input v-model="userForm.password" required type="password" minlength="8" maxlength="128" placeholder="至少 8 位" />
+        </label>
+        <label>
+          <span>角色</span>
+          <select v-model="userForm.role">
+            <option value="user">普通用户</option>
+            <option value="admin">管理员</option>
+          </select>
+        </label>
+        <label>
+          <span>初始积分</span>
+          <input v-model.number="userForm.initialCredits" type="number" min="0" step="1" />
+        </label>
+        <p class="form-hint">Seedance 2.5 固定每次消耗 2 积分。任务在提交给 Dola 前失败会自动退回。</p>
+        <p v-if="userFormError" class="api-test-error">{{ userFormError }}</p>
+        <button class="button primary" type="submit" :disabled="userFormSubmitting">
+          {{ userFormSubmitting ? "正在创建…" : "创建用户" }}
+        </button>
+      </form>
+
+      <div class="panel user-list-panel">
+        <div class="section-title">
+          <div>
+            <h2>用户与积分</h2>
+            <p>用户积分保存在 SQLite，软件重启后不会丢失。</p>
+          </div>
+          <button class="button" type="button" @click="refresh">刷新</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>用户</th><th>角色</th><th>积分</th><th>状态</th><th>创建时间</th><th>操作</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="user in apiUsers" :key="user.id">
+                <td><strong>{{ user.username }}</strong><span class="cell-meta">ID {{ user.id }}</span></td>
+                <td>{{ user.role === 'admin' ? '管理员' : '普通用户' }}</td>
+                <td><strong class="user-credit-value">{{ user.credits }}</strong></td>
+                <td><span class="pill" :class="user.disabled ? 'request-failed' : 'request-success'">{{ user.disabled ? '已停用' : '正常' }}</span></td>
+                <td class="cell-meta">{{ formatTime(user.createdAt) }}</td>
+                <td class="row-actions">
+                  <button class="button compact-button primary" type="button" @click="adjustUserCredits(user)">调整积分</button>
+                  <button class="button compact-button" type="button" @click="toggleApiUser(user)">{{ user.disabled ? '启用' : '停用' }}</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div v-if="!apiUsers.length" class="empty compact">还没有接口用户。</div>
+        </div>
+
+        <h3 class="ledger-title">最近积分流水</h3>
+        <div class="table-wrap ledger-table-wrap">
+          <table>
+            <thead><tr><th>时间</th><th>用户</th><th>变动</th><th>余额</th><th>类型</th><th>备注 / 任务</th></tr></thead>
+            <tbody>
+              <tr v-for="entry in creditLedger" :key="entry.id">
+                <td class="cell-meta">{{ formatTime(entry.createdAt) }}</td>
+                <td><strong>{{ entry.username }}</strong></td>
+                <td :class="entry.amount > 0 ? 'credit-positive' : 'credit-negative'">{{ entry.amount > 0 ? '+' : '' }}{{ entry.amount }}</td>
+                <td>{{ entry.balanceAfter }}</td>
+                <td>{{ entry.type === 'consume' ? '消费' : entry.type === 'refund' ? '退回' : '发放' }}</td>
+                <td><span>{{ entry.note }}</span><code v-if="entry.requestId" class="request-id">{{ entry.requestId }}</code></td>
+              </tr>
+            </tbody>
+          </table>
+          <div v-if="!creditLedger.length" class="empty compact">还没有积分流水。</div>
+        </div>
       </div>
     </section>
 
@@ -1207,7 +1357,7 @@ onBeforeUnmount(() => {
             <tr v-for="item in filteredApiRequests" :key="item.id">
               <td class="log-request-cell">
                 <code class="request-id">{{ item.requestId }}</code>
-                <span class="cell-meta">{{ sourceLabel(item.source) }} · {{ formatTime(item.createdAt) }}</span>
+                <span class="cell-meta">{{ item.username ? `用户 ${item.username}` : '管理端' }} · {{ sourceLabel(item.source) }} · {{ formatTime(item.createdAt) }}</span>
               </td>
               <td>
                 <strong class="model-name">{{ modelLabels[item.model] }}</strong>
@@ -1328,6 +1478,10 @@ onBeforeUnmount(() => {
           <div>
             <dt>来源</dt>
             <dd>{{ sourceLabel(selectedRequest.source) }}</dd>
+          </div>
+          <div>
+            <dt>接口用户 / 积分</dt>
+            <dd>{{ selectedRequest.username || "管理端调用" }} / {{ selectedRequest.creditCost }}{{ selectedRequest.creditRefunded ? "（已退回）" : "" }}</dd>
           </div>
           <div>
             <dt>模型</dt>

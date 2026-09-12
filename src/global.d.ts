@@ -3,8 +3,11 @@ import type {
   AccountUpdateInput,
   ApiRequest,
   ApiServerStatus,
+  ApiUser,
+  ApiUserCreateInput,
   AppSettings,
   AppSettingsUpdateInput,
+  CreditLedgerEntry,
   OperationLog
 } from "../electron/types";
 
@@ -34,6 +37,15 @@ declare global {
       apiRequests: {
         list: (limit?: number) => Promise<ApiRequest[]>;
         clear: () => Promise<boolean>;
+      };
+      apiUsers: {
+        list: () => Promise<ApiUser[]>;
+        create: (input: ApiUserCreateInput) => Promise<ApiUser>;
+        grant: (input: { userId: number; amount: number; note?: string }) => Promise<ApiUser>;
+        setDisabled: (input: { userId: number; disabled: boolean }) => Promise<ApiUser>;
+      };
+      creditLedger: {
+        list: (userId?: number, limit?: number) => Promise<CreditLedgerEntry[]>;
       };
       operationLogs: {
         list: (limit?: number) => Promise<OperationLog[]>;

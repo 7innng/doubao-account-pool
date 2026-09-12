@@ -1,7 +1,7 @@
 import http, { type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { app, BrowserWindow, ipcMain, session } from "electron";
 import log from "electron-log/main.js";
@@ -11,6 +11,8 @@ import { ensureDolaExtension } from "./extension-loader.js";
 import { toPublicApiRequest } from "./public-api.js";
 import type {
   AccountUpdateInput,
+  ApiUser,
+  ApiUserCreateInput,
   ApiRequest,
   ApiServerStatus,
   AppSettings,
@@ -29,6 +31,12 @@ let executor: DolaExecutor;
 let apiServer: LocalApiServer;
 
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
+const USER_SESSION_DAYS = 30;
+const USER_GENERATION_CREDIT_COST = 2;
+
+type ApiPrincipal =
+  | { kind: "service" }
+  | { kind: "user"; user: ApiUser };
 
 class LocalApiServer {
   private server: Server | null = null;
@@ -124,13 +132,168 @@ class LocalApiServer {
         return;
       }
 
-      if (!isAuthorized(request, settings.apiKey)) {
-        sendJson(response, 401, { error: "Unauthorized" });
+      if (request.method === "POST" && requestUrl.pathname === "/api/auth/register") {
+        const body = await readJsonBody<{ username?: string; password?: string }>(request);
+        const credentials = validateCredentials(body.username, body.password);
+        if (this.database.getApiUserAuthByUsername(credentials.username)) {
+          sendJson(response, 409, { error: "用户名已存在" });
+          return;
+        }
+        const password = hashPassword(credentials.password);
+        const user = this.database.createApiUser(
+          { username: credentials.username, password: "", role: "user", initialCredits: 0 },
+          password.hash,
+          password.salt
+        );
+        const accessToken = issueUserSession(this.database, user.id);
+        sendJson(response, 201, { accessToken, user: toPublicUser(user) });
+        notifyDataChanged();
+        return;
+      }
+
+      if (request.method === "POST" && requestUrl.pathname === "/api/auth/login") {
+        const body = await readJsonBody<{ username?: string; password?: string }>(request);
+        const username = String(body.username || "").trim();
+        const password = String(body.password || "");
+        const userAuth = this.database.getApiUserAuthByUsername(username);
+        if (!userAuth || Boolean(userAuth.disabled) || !verifyPassword(password, userAuth.passwordSalt, userAuth.passwordHash)) {
+          sendJson(response, 401, { error: "用户名或密码错误" });
+          return;
+        }
+        const user = this.database.getApiUser(userAuth.id)!;
+        const accessToken = issueUserSession(this.database, user.id);
+        sendJson(response, 200, { accessToken, user: toPublicUser(user) });
+        return;
+      }
+
+      const principal = authenticateRequest(request, settings.apiKey, this.database);
+      if (!principal) {
+        sendJson(response, 401, { error: "请先登录或提供有效的 API Token" });
+        return;
+      }
+
+      if (request.method === "GET" && requestUrl.pathname === "/api/me") {
+        if (principal.kind !== "user") {
+          sendJson(response, 400, { error: "服务端 API Key 没有个人积分账户" });
+          return;
+        }
+        sendJson(response, 200, { user: toPublicUser(this.database.getApiUser(principal.user.id)!) });
+        return;
+      }
+
+      if (request.method === "POST" && requestUrl.pathname === "/api/auth/logout") {
+        const token = bearerToken(request);
+        if (principal.kind === "user" && token) this.database.deleteApiSession(hashToken(token));
+        sendJson(response, 200, { ok: true });
+        return;
+      }
+
+      if (request.method === "GET" && requestUrl.pathname === "/api/me/credits") {
+        if (principal.kind !== "user") {
+          sendJson(response, 400, { error: "服务端 API Key 没有个人积分流水" });
+          return;
+        }
+        sendJson(response, 200, {
+          user: toPublicUser(this.database.getApiUser(principal.user.id)!),
+          ledger: this.database.listCreditLedger(principal.user.id, 200)
+        });
+        return;
+      }
+
+      if (request.method === "GET" && requestUrl.pathname === "/api/me/requests") {
+        if (principal.kind !== "user") {
+          sendJson(response, 400, { error: "服务端 API Key 没有个人任务列表" });
+          return;
+        }
+        const limit = Math.min(100, Math.max(1, Math.trunc(Number(requestUrl.searchParams.get("limit")) || 20)));
+        sendJson(response, 200, {
+          requests: this.database.listApiRequests(limit, principal.user.id).map(toPublicApiRequest)
+        });
         return;
       }
 
       if (request.method === "GET" && requestUrl.pathname === "/api/accounts") {
+        if (!isAdminPrincipal(principal)) {
+          sendJson(response, 403, { error: "Forbidden" });
+          return;
+        }
         sendJson(response, 200, { accounts: this.database.listAccounts() });
+        return;
+      }
+
+      if (request.method === "GET" && requestUrl.pathname === "/api/admin/users") {
+        if (!isAdminPrincipal(principal)) {
+          sendJson(response, 403, { error: "Forbidden" });
+          return;
+        }
+        sendJson(response, 200, { users: this.database.listApiUsers() });
+        return;
+      }
+
+      if (request.method === "POST" && requestUrl.pathname === "/api/admin/users") {
+        if (!isAdminPrincipal(principal)) {
+          sendJson(response, 403, { error: "Forbidden" });
+          return;
+        }
+        const body = await readJsonBody<ApiUserCreateInput>(request);
+        const credentials = validateCredentials(body.username, body.password);
+        if (this.database.getApiUserAuthByUsername(credentials.username)) {
+          sendJson(response, 409, { error: "用户名已存在" });
+          return;
+        }
+        const password = hashPassword(credentials.password);
+        const user = this.database.createApiUser(
+          {
+            username: credentials.username,
+            password: "",
+            role: body.role === "admin" ? "admin" : "user",
+            initialCredits: Math.max(0, Math.trunc(Number(body.initialCredits) || 0))
+          },
+          password.hash,
+          password.salt
+        );
+        notifyDataChanged();
+        sendJson(response, 201, { user: toPublicUser(user) });
+        return;
+      }
+
+      if (request.method === "POST" && requestUrl.pathname === "/api/admin/credits/grant") {
+        if (!isAdminPrincipal(principal)) {
+          sendJson(response, 403, { error: "Forbidden" });
+          return;
+        }
+        const body = await readJsonBody<{ userId?: number; amount?: number; note?: string }>(request);
+        const userId = Math.trunc(Number(body.userId));
+        const amount = Math.trunc(Number(body.amount));
+        if (!userId || !amount) {
+          sendJson(response, 400, { error: "userId 和非零 amount 为必填项" });
+          return;
+        }
+        const user = this.database.grantApiUserCredits(userId, amount, String(body.note || "管理员发放积分"));
+        notifyDataChanged();
+        sendJson(response, 200, { user: toPublicUser(user) });
+        return;
+      }
+
+      const disableUserMatch = requestUrl.pathname.match(/^\/api\/admin\/users\/(\d+)\/disabled$/);
+      if (request.method === "POST" && disableUserMatch) {
+        if (!isAdminPrincipal(principal)) {
+          sendJson(response, 403, { error: "Forbidden" });
+          return;
+        }
+        const body = await readJsonBody<{ disabled?: boolean }>(request);
+        const user = this.database.setApiUserDisabled(Number(disableUserMatch[1]), Boolean(body.disabled));
+        notifyDataChanged();
+        sendJson(response, 200, { user: toPublicUser(user) });
+        return;
+      }
+
+      if (request.method === "GET" && requestUrl.pathname === "/api/admin/credits") {
+        if (!isAdminPrincipal(principal)) {
+          sendJson(response, 403, { error: "Forbidden" });
+          return;
+        }
+        sendJson(response, 200, { ledger: this.database.listCreditLedger(undefined, 500) });
         return;
       }
 
@@ -154,7 +317,8 @@ class LocalApiServer {
         const account = settings.executorEnabled
           ? this.database.reserveAvailableAccount(model)
           : this.database.findAvailableAccount(model);
-        const cost = model === "seedance_2_0" ? settings.seedance20Cost : settings.seedance25Cost;
+        const cost = settings.seedance25Cost;
+        const apiUserId = principal.kind === "user" ? principal.user.id : null;
 
         if (!account) {
           const failed = this.database.createApiRequest({
@@ -166,6 +330,8 @@ class LocalApiServer {
             prompt,
             referenceImagePath,
             referenceImagePaths,
+            userId: apiUserId,
+            creditCost: 0,
             removeWatermark: true,
             callbackUrl: body.callbackUrl
           });
@@ -181,22 +347,47 @@ class LocalApiServer {
           return;
         }
 
-        this.database.deductQuota(account.id, model);
-        const created = this.database.createApiRequest({
-          requestId,
-          source: body.source,
-          model,
-          accountId: account.id,
-          status: "accepted",
-          message: settings.executorEnabled
-            ? `已接收，已预扣 ${cost} 额度，已进入执行队列`
-            : `已接收，已预扣 ${cost} 额度，自动执行已关闭`,
-          prompt,
-          referenceImagePath,
-          referenceImagePaths,
-          removeWatermark: true,
-          callbackUrl: body.callbackUrl
-        });
+        let userCreditsCharged = false;
+        if (apiUserId && !this.database.consumeApiUserCredits(apiUserId, USER_GENERATION_CREDIT_COST, requestId)) {
+          this.database.updateAccount({ id: account.id, currentStatus: "idle" });
+          sendJson(response, 402, {
+            error: `积分不足，Seedance 2.5 每次需要 ${USER_GENERATION_CREDIT_COST} 积分`,
+            user: toPublicUser(this.database.getApiUser(apiUserId)!)
+          });
+          return;
+        }
+        userCreditsCharged = Boolean(apiUserId);
+
+        let accountQuotaCharged = false;
+        let created: ApiRequest;
+        try {
+          this.database.deductQuota(account.id, model);
+          accountQuotaCharged = true;
+          created = this.database.createApiRequest({
+            requestId,
+            source: body.source,
+            model,
+            accountId: account.id,
+            status: "accepted",
+            message: settings.executorEnabled
+              ? `已接收，已预扣 ${cost} 额度，已进入执行队列`
+              : `已接收，已预扣 ${cost} 额度，自动执行已关闭`,
+            prompt,
+            referenceImagePath,
+            referenceImagePaths,
+            userId: apiUserId,
+            creditCost: apiUserId ? USER_GENERATION_CREDIT_COST : 0,
+            removeWatermark: true,
+            callbackUrl: body.callbackUrl
+          });
+        } catch (error) {
+          if (accountQuotaCharged) this.database.refundQuota(account.id, model);
+          if (apiUserId && userCreditsCharged) {
+            this.database.grantApiUserCredits(apiUserId, USER_GENERATION_CREDIT_COST, "接口任务记录失败，自动退回积分");
+          }
+          this.database.updateAccount({ id: account.id, currentStatus: "idle" });
+          throw error;
+        }
         if (settings.executorEnabled) {
           this.requestExecutor.enqueue(created.requestId);
         }
@@ -219,6 +410,10 @@ class LocalApiServer {
         const apiRequest = this.database.getApiRequest(requestId);
         if (!apiRequest) {
           sendJson(response, 404, { error: "request not found" });
+          return;
+        }
+        if (principal.kind === "user" && principal.user.role !== "admin" && apiRequest.userId !== principal.user.id) {
+          sendJson(response, 403, { error: "无权操作此任务" });
           return;
         }
         if (!apiRequest.accountId) {
@@ -248,11 +443,19 @@ class LocalApiServer {
           sendJson(response, 404, { error: "request not found" });
           return;
         }
+        if (principal.kind === "user" && principal.user.role !== "admin" && apiRequest.userId !== principal.user.id) {
+          sendJson(response, 403, { error: "无权查看此任务" });
+          return;
+        }
         sendJson(response, 200, toPublicApiRequest(apiRequest));
         return;
       }
 
       if (request.method === "POST" && requestUrl.pathname === "/api/watermark/parse") {
+        if (!isAdminPrincipal(principal)) {
+          sendJson(response, 403, { error: "Forbidden" });
+          return;
+        }
         const body = await readJsonBody<{ url?: string }>(request);
         const sourceUrl = body.url?.trim();
         if (!sourceUrl) {
@@ -290,7 +493,14 @@ class LocalApiServer {
       sendJson(response, 404, { error: "not found" });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
-      sendJson(response, message.includes("参考图最多只能选择 10 张") ? 400 : 500, { error: message });
+      const clientError = [
+        "参考图最多只能选择 10 张",
+        "用户名需为",
+        "密码长度需为",
+        "请求体不能超过",
+        "Unexpected token"
+      ].some((fragment) => message.includes(fragment));
+      sendJson(response, clientError ? 400 : 500, { error: message });
     }
   }
 }
@@ -448,6 +658,39 @@ function registerIpc() {
     db.clearApiRequests();
     return true;
   });
+  ipcMain.handle("api-users:list", () => db.listApiUsers());
+  ipcMain.handle("api-users:create", (_event, input: ApiUserCreateInput) => {
+    const credentials = validateCredentials(input.username, input.password);
+    if (db.getApiUserAuthByUsername(credentials.username)) throw new Error("用户名已存在");
+    const password = hashPassword(credentials.password);
+    const user = db.createApiUser(
+      {
+        username: credentials.username,
+        password: "",
+        role: input.role === "admin" ? "admin" : "user",
+        initialCredits: Math.max(0, Math.trunc(Number(input.initialCredits) || 0))
+      },
+      password.hash,
+      password.salt
+    );
+    recordOperation(null, null, "创建接口用户", "success", `已创建用户 ${user.username}`);
+    return user;
+  });
+  ipcMain.handle("api-users:grant", (_event, input: { userId: number; amount: number; note?: string }) => {
+    const amount = Math.trunc(Number(input.amount));
+    if (!amount) throw new Error("积分变动不能为 0");
+    const user = db.grantApiUserCredits(input.userId, amount, String(input.note || "管理端调整积分"));
+    recordOperation(null, null, "调整用户积分", "success", `${user.username} ${amount > 0 ? "+" : ""}${amount}，余额 ${user.credits}`);
+    return user;
+  });
+  ipcMain.handle("api-users:set-disabled", (_event, input: { userId: number; disabled: boolean }) => {
+    const user = db.setApiUserDisabled(input.userId, input.disabled);
+    recordOperation(null, null, input.disabled ? "停用接口用户" : "启用接口用户", "success", user.username);
+    return user;
+  });
+  ipcMain.handle("credit-ledger:list", (_event, userId?: number, limit?: number) =>
+    db.listCreditLedger(userId, limit || 500)
+  );
   ipcMain.handle("operation-logs:list", (_event, limit?: number) => db.listOperationLogs(limit || 500));
   ipcMain.handle("operation-logs:clear", () => {
     db.clearOperationLogs();
@@ -476,9 +719,77 @@ function normalizeModel(model: string): DolaModel | null {
   return null;
 }
 
-function isAuthorized(request: IncomingMessage, apiKey: string) {
-  if (!apiKey.trim()) return true;
-  return request.headers.authorization === `Bearer ${apiKey}`;
+function authenticateRequest(
+  request: IncomingMessage,
+  apiKey: string,
+  database: AppDatabase
+): ApiPrincipal | null {
+  const token = bearerToken(request);
+  if (!token) return null;
+  if (apiKey.trim() && token === apiKey.trim()) return { kind: "service" };
+  const user = database.getApiUserBySessionHash(hashToken(token));
+  if (!user || user.disabled) return null;
+  return { kind: "user", user };
+}
+
+function bearerToken(request: IncomingMessage) {
+  const authorization = String(request.headers.authorization || "");
+  return authorization.match(/^Bearer\s+(.+)$/i)?.[1]?.trim() || null;
+}
+
+function isAdminPrincipal(principal: ApiPrincipal) {
+  return principal.kind === "service" || principal.user.role === "admin";
+}
+
+function validateCredentials(rawUsername?: string, rawPassword?: string) {
+  const username = String(rawUsername || "").trim();
+  const password = String(rawPassword || "");
+  if (!/^[A-Za-z0-9_\-]{3,32}$/.test(username)) {
+    throw new Error("用户名需为 3-32 位字母、数字、下划线或连字符");
+  }
+  if (password.length < 8 || password.length > 128) {
+    throw new Error("密码长度需为 8-128 位");
+  }
+  return { username, password };
+}
+
+function hashPassword(password: string, salt = randomBytes(16).toString("hex")) {
+  return {
+    salt,
+    hash: scryptSync(password, salt, 64).toString("hex")
+  };
+}
+
+function verifyPassword(password: string, salt: string, expectedHash: string) {
+  try {
+    const actual = Buffer.from(hashPassword(password, salt).hash, "hex");
+    const expected = Buffer.from(expectedHash, "hex");
+    return actual.length === expected.length && timingSafeEqual(actual, expected);
+  } catch {
+    return false;
+  }
+}
+
+function hashToken(token: string) {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+function issueUserSession(database: AppDatabase, userId: number) {
+  const token = randomBytes(32).toString("base64url");
+  const expiresAt = new Date(Date.now() + USER_SESSION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  database.createApiSession(userId, hashToken(token), expiresAt);
+  return token;
+}
+
+function toPublicUser(user: ApiUser) {
+  return {
+    id: user.id,
+    username: user.username,
+    role: user.role,
+    credits: user.credits,
+    disabled: user.disabled,
+    createdAt: user.createdAt
+  };
 }
 
 async function readGenerateRequest(request: IncomingMessage, requestId: string): Promise<GenerateRequestBody> {
@@ -497,8 +808,12 @@ async function readJsonBody<T>(request: IncomingMessage): Promise<T> {
 
 async function readBufferBody(request: IncomingMessage): Promise<Buffer> {
   const chunks: Buffer[] = [];
+  let size = 0;
   for await (const chunk of request) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += buffer.length;
+    if (size > 120 * 1024 * 1024) throw new Error("请求体不能超过 120MB");
+    chunks.push(buffer);
   }
   return Buffer.concat(chunks);
 }

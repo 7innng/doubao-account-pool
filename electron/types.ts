@@ -3,6 +3,36 @@ export type AccountRuntimeStatus = "idle" | "busy" | "error" | "login_required";
 export type DolaModel = "seedance_2_0" | "seedance_2_5";
 export type ApiRequestStatus = "accepted" | "running" | "success" | "failed" | "stopped";
 export type OperationLogStatus = "info" | "success" | "failed";
+export type ApiUserRole = "admin" | "user";
+
+export interface ApiUser {
+  id: number;
+  username: string;
+  role: ApiUserRole;
+  credits: number;
+  disabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ApiUserCreateInput {
+  username: string;
+  password: string;
+  role?: ApiUserRole;
+  initialCredits?: number;
+}
+
+export interface CreditLedgerEntry {
+  id: number;
+  userId: number;
+  username: string;
+  amount: number;
+  balanceAfter: number;
+  type: "grant" | "consume" | "refund";
+  requestId: string | null;
+  note: string;
+  createdAt: string;
+}
 
 export interface Account {
   id: number;
@@ -70,6 +100,10 @@ export interface ApiRequest {
   prompt: string;
   referenceImagePath: string | null;
   referenceImagePaths: string[];
+  userId: number | null;
+  username: string | null;
+  creditCost: number;
+  creditRefunded: boolean;
   removeWatermark: boolean;
   callbackUrl: string | null;
   dolaThreadUrl: string | null;
@@ -91,6 +125,8 @@ export interface ApiRequestCreateInput {
   prompt: string;
   referenceImagePath?: string | null;
   referenceImagePaths?: string[];
+  userId?: number | null;
+  creditCost?: number;
   removeWatermark?: boolean;
   callbackUrl?: string | null;
 }
