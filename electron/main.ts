@@ -2,6 +2,7 @@ import http, { type IncomingMessage, type Server, type ServerResponse } from "no
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
+import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { app, BrowserWindow, ipcMain, session } from "electron";
 import log from "electron-log/main.js";
@@ -433,6 +434,26 @@ class LocalApiServer {
           status: "accepted",
           message: "已进入结果恢复队列，不会重新提交视频生成"
         });
+        return;
+      }
+
+      const videoMatch = requestUrl.pathname.match(/^\/api\/requests\/([^/]+)\/video\.mp4$/);
+      if (request.method === "GET" && videoMatch) {
+        const requestId = decodeURIComponent(videoMatch[1]);
+        const apiRequest = this.database.getApiRequest(requestId);
+        if (!apiRequest) {
+          sendJson(response, 404, { error: "request not found" });
+          return;
+        }
+        if (principal.kind === "user" && principal.user.role !== "admin" && apiRequest.userId !== principal.user.id) {
+          sendJson(response, 403, { error: "无权下载此视频" });
+          return;
+        }
+        if (!apiRequest.cleanVideoUrl) {
+          sendJson(response, 409, { error: "任务尚未生成可下载视频" });
+          return;
+        }
+        await proxyMp4Video(request, response, apiRequest.requestId, apiRequest.cleanVideoUrl);
         return;
       }
 
@@ -990,6 +1011,37 @@ function sendJson(response: ServerResponse, statusCode: number, payload: unknown
     return;
   }
   response.end(JSON.stringify(payload, null, 2));
+}
+
+async function proxyMp4Video(
+  request: IncomingMessage,
+  response: ServerResponse,
+  requestId: string,
+  sourceUrl: string
+) {
+  const headers: Record<string, string> = {};
+  if (request.headers.range) headers.Range = String(request.headers.range);
+  const upstream = await fetch(sourceUrl, { headers, redirect: "follow" });
+  if (!upstream.ok || !upstream.body) {
+    sendJson(response, upstream.status || 502, { error: `视频源访问失败：HTTP ${upstream.status || 502}` });
+    return;
+  }
+
+  const responseHeaders: Record<string, string> = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Expose-Headers": "Content-Length, Content-Range, Accept-Ranges, Content-Disposition",
+    "Content-Type": "video/mp4",
+    "Content-Disposition": `inline; filename="${sanitizeFilename(requestId)}.mp4"`,
+    "Cache-Control": "private, max-age=300"
+  };
+  for (const name of ["content-length", "content-range", "accept-ranges"] as const) {
+    const value = upstream.headers.get(name);
+    if (value) responseHeaders[name] = value;
+  }
+  response.writeHead(upstream.status, responseHeaders);
+  const stream = Readable.fromWeb(upstream.body as never);
+  stream.on("error", () => response.destroy());
+  stream.pipe(response);
 }
 
 async function postCallback(payload: ApiRequest) {

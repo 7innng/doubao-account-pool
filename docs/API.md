@@ -101,6 +101,8 @@ Content-Type: multipart/form-data
 
 生成请求固定执行最终 MP4 结果验证。去水印失败、平台不支持或没有取得可播放 MP4 时，任务状态为 `failed`。
 
+成功结果同时返回 `videoUrl`，格式为 `/api/requests/:requestId/video.mp4`。这是需要相同 Bearer Token 的视频代理，会强制返回 `Content-Type: video/mp4` 和 `.mp4` 文件名；即使上游地址没有扩展名或返回 `binary/octet-stream`，也可直接作为 MP4 下载。`cleanVideoUrl` 保留原始签名地址，并在缺少扩展名时自动补上 `.mp4` 结尾提示。
+
 执行器固定选择 Seedance 2.5，并在真正发送前确认Dola页面处于视频生成模式、模型为 Seedance 2.5、工具栏显示 `30s` 且内置扩展已开启。任一条件不满足会直接返回失败，不会误发成其他模型或较短时长。软件内的“API 调试”页支持一次选择最多 10 张参考图、提交同一个接口并自动轮询最终结果；勾选“显示 Dola 浏览器执行窗口”可现场观察执行过程。
 
 ## 查询任务状态
